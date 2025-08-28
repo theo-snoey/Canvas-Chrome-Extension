@@ -16,7 +16,7 @@ body {
 .container {
   display: flex;
   flex-direction: column;
-  height: 500px;
+  height: 600px; /* Increased height to accommodate test section */
 }
 
 .header {
@@ -158,4 +158,86 @@ body {
 #sendButton:disabled {
   background: #d1d5db;
   cursor: not-allowed;
+}
+
+/* Test Section Styles */
+.test-section {
+  padding: 16px;
+  border-top: 2px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+
+.test-header {
+  margin-bottom: 12px;
+}
+
+.test-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.test-button {
+  width: 100%;
+  padding: 10px 16px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-bottom: 12px;
+}
+
+.test-button:hover {
+  background: #d97706;
+}
+
+.test-button:disabled {
+  background: #d1d5db;
+  cursor: not-allowed;
+}
+
+.test-results {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: #374151;
+}
+
+.test-results:empty::before {
+  content: "Test results will appear here...";
+  color: #9ca3af;
+  font-style: italic;
+}
+
+/* Development Mode Toggle */
+.dev-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.dev-toggle:hover {
+  opacity: 1;
 }
