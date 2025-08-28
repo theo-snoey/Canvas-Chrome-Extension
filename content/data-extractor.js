@@ -186,6 +186,7 @@ class CanvasDataExtractor {
         data.courses = courseElements.map((course, index) => {
           console.log(`Processing course ${index + 1}:`, course);
           
+          // Try multiple methods to get course name
           const nameElement = this.safeQuery('.course-name, .course-title, h3, h4, .ic-DashboardCard__header_title', course);
           const codeElement = this.safeQuery('.course-code, .course-subtitle, .subtitle', course);
           const linkElement = this.safeQuery('a', course);
@@ -194,13 +195,19 @@ class CanvasDataExtractor {
           console.log(`  - codeElement:`, codeElement);
           console.log(`  - linkElement:`, linkElement);
           
-          const name = this.safeTextContent(nameElement);
+          // Get name from aria-label if nameElement is null
+          let name = this.safeTextContent(nameElement);
+          if (!name) {
+            name = this.safeAttribute(course, 'aria-label') || '';
+            console.log(`  - using aria-label for name: "${name}"`);
+          }
+          
           const code = this.safeTextContent(codeElement);
           const url = this.safeAttribute(linkElement, 'href') || this.safeAttribute(course, 'href');
           
-          console.log(`  - extracted name: "${name}"`);
-          console.log(`  - extracted code: "${code}"`);
-          console.log(`  - extracted url: "${url}"`);
+          console.log(`  - final extracted name: "${name}"`);
+          console.log(`  - final extracted code: "${code}"`);
+          console.log(`  - final extracted url: "${url}"`);
           
           return {
             name: name,
@@ -369,3 +376,4 @@ try {
 } catch (error) {
   console.error('❌ Data extractor test failed:', error);
 }
+// Force reload Thu Aug 28 16:04:17 PDT 2025
