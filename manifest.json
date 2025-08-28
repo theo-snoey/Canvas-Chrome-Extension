@@ -34,7 +34,7 @@
         "*://*.canvas.org/*",
         "<all_urls>"
       ],
-      "js": ["content/content-script.js"],
+      "js": ["content/content-script.js", "content/data-extractor.js"],
       "run_at": "document_idle"
     }
   ],
