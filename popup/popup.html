@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Assistant</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Canvas Assistant</h1>
+      <div class="status" id="status">Initializing...</div>
+    </header>
+
+    <div class="chat-container" id="chatContainer">
+      <div class="welcome-message">
+        <p>👋 Welcome to Canvas Assistant!</p>
+        <p>Navigate to your Canvas LMS page to get started.</p>
+      </div>
+    </div>
+
+    <div class="input-container">
+      <input
+        type="text"
+        id="messageInput"
+        placeholder="Ask me about your courses, grades, assignments..."
+        disabled
+      >
+      <button id="sendButton" disabled>Send</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

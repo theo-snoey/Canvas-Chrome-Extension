@@ -1,0 +1,30 @@
+{
+  "name": "canvas-lms-assistant",
+  "version": "0.1.0",
+  "description": "AI-powered chat interface Chrome extension for Canvas LMS",
+  "main": "manifest.json",
+  "scripts": {
+    "dev": "echo 'Development mode - make changes and refresh extension manually'",
+    "build": "echo 'No build step required for Chrome extension'",
+    "test": "echo 'Run tests in test/ directory'",
+    "lint": "echo 'Add linting setup as needed'",
+    "clean": "rm -rf node_modules dist build"
+  },
+  "keywords": [
+    "chrome-extension",
+    "canvas-lms",
+    "education",
+    "productivity",
+    "ai-assistant"
+  ],
+  "author": "Canvas Assistant Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "."
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
