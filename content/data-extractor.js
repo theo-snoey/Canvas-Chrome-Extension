@@ -236,25 +236,45 @@ class CanvasDataExtractor {
     return data;
   }
 
-  /**
-   * Extract course page data
+    /**
+   * Extract course page data - Enhanced for Phase 3.2
    */
   extractCourseData() {
-    console.log('Extracting course data...');
+    console.log('Extracting comprehensive course data...');
     
     const data = {
       type: 'course',
       courseInfo: {},
-      navigation: []
+      navigation: [],
+      announcements: [],
+      instructor: {},
+      stats: {}
     };
 
-    // Extract course name
+    // Extract course information
+    this.extractCourseBasicInfo(data);
+    this.extractCourseNavigation(data);
+    this.extractCourseAnnouncements(data);
+    this.extractInstructorInfo(data);
+    this.extractCourseStats(data);
+
+    console.log('Enhanced course extraction completed:', data);
+    return data;
+  }
+
+  /**
+   * Extract basic course information
+   */
+  extractCourseBasicInfo(data) {
+    // Course name from multiple sources
     const courseNameSelectors = [
       '.course-title',
       '.page-title',
       'h1',
       '.course-header h1',
-      '.ic-app-course-nav .course-title'
+      '.ic-app-course-nav .course-title',
+      '#breadcrumbs .ellipsible',
+      '.ic-app-course-menu .ic-app-course-menu__header'
     ];
 
     for (const selector of courseNameSelectors) {
@@ -265,31 +285,182 @@ class CanvasDataExtractor {
       }
     }
 
-    // Extract navigation menu
+    // Course code/number
+    const codeSelectors = [
+      '.course-code',
+      '.course-subtitle',
+      '[data-course-code]'
+    ];
+
+    for (const selector of codeSelectors) {
+      const codeElement = this.safeQuery(selector);
+      if (codeElement && this.safeTextContent(codeElement)) {
+        data.courseInfo.code = this.safeTextContent(codeElement);
+        break;
+      }
+    }
+
+    // Course ID from URL
+    const urlMatch = window.location.pathname.match(/\/courses\/(\d+)/);
+    if (urlMatch) {
+      data.courseInfo.id = urlMatch[1];
+    }
+
+    // Course term/semester
+    const termSelectors = [
+      '.course-term',
+      '.term-name',
+      '[data-term]'
+    ];
+
+    for (const selector of termSelectors) {
+      const termElement = this.safeQuery(selector);
+      if (termElement && this.safeTextContent(termElement)) {
+        data.courseInfo.term = this.safeTextContent(termElement);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Extract course navigation menu
+   */
+  extractCourseNavigation(data) {
     const navSelectors = [
+      '.ic-app-course-nav .ic-app-course-menu a',
       '.course-navigation a',
       '.navigation a',
-      '.nav-item',
-      '.ic-app-course-nav a'
+      '.nav-item a',
+      '#section-tabs a'
     ];
 
     for (const selector of navSelectors) {
       const navElements = this.safeQueryAll(selector);
       if (navElements.length > 0) {
         data.navigation = navElements.map(nav => {
+          const text = this.safeTextContent(nav);
+          const url = this.safeAttribute(nav, 'href');
+          const isActive = nav.classList.contains('active') || 
+                          nav.classList.contains('selected') || 
+                          nav.classList.contains('ic-app-course-nav__menu-list-item--active');
+          
+          // Extract icon if present
+          const iconElement = this.safeQuery('i, .icon, svg', nav);
+          const icon = iconElement ? this.safeAttribute(iconElement, 'class') : '';
+
           return {
-            text: this.safeTextContent(nav),
-            url: this.safeAttribute(nav, 'href'),
-            active: nav.classList.contains('active') || nav.classList.contains('selected')
+            text: text,
+            url: url,
+            active: isActive,
+            icon: icon
           };
-        }).filter(nav => nav.text);
-        
+        }).filter(nav => nav.text && nav.text.trim());
+
+        break;
+      }
+    }
+  }
+
+  /**
+   * Extract course announcements
+   */
+  extractCourseAnnouncements(data) {
+    const announcementSelectors = [
+      '.announcement',
+      '.ic-announcement',
+      '.discussion-entry',
+      '.announcement-content',
+      '[data-testid="announcement"]'
+    ];
+
+    for (const selector of announcementSelectors) {
+      const announcementElements = this.safeQueryAll(selector);
+      if (announcementElements.length > 0) {
+        data.announcements = announcementElements.map(announcement => {
+          const titleElement = this.safeQuery('.announcement-title, .discussion-title, h3, h4, .title', announcement);
+          const contentElement = this.safeQuery('.announcement-content, .content, .message, p', announcement);
+          const dateElement = this.safeQuery('.announcement-date, .date, .published-date, time', announcement);
+          const authorElement = this.safeQuery('.announcement-author, .author, .user-name', announcement);
+
+          return {
+            title: this.safeTextContent(titleElement),
+            content: this.safeTextContent(contentElement),
+            date: this.safeTextContent(dateElement) || this.safeAttribute(dateElement, 'datetime'),
+            author: this.safeTextContent(authorElement)
+          };
+        }).filter(announcement => announcement.title);
+
+        break;
+      }
+    }
+  }
+
+  /**
+   * Extract instructor information
+   */
+  extractInstructorInfo(data) {
+    const instructorSelectors = [
+      '.instructor-info',
+      '.teacher-info',
+      '.course-instructor',
+      '.instructor-name',
+      '[data-testid="instructor"]'
+    ];
+
+    for (const selector of instructorSelectors) {
+      const instructorElement = this.safeQuery(selector);
+      if (instructorElement) {
+        const nameElement = this.safeQuery('.name, .instructor-name, h3, h4', instructorElement);
+        const emailElement = this.safeQuery('.email, a[href^="mailto:"]', instructorElement);
+        const avatarElement = this.safeQuery('.avatar, .profile-pic, img', instructorElement);
+
+        data.instructor = {
+          name: this.safeTextContent(nameElement),
+          email: this.safeTextContent(emailElement) || this.safeAttribute(emailElement, 'href')?.replace('mailto:', ''),
+          avatar: this.safeAttribute(avatarElement, 'src')
+        };
+        break;
+      }
+    }
+  }
+
+  /**
+   * Extract course statistics
+   */
+  extractCourseStats(data) {
+    // Student count
+    const studentCountSelectors = [
+      '.student-count',
+      '.enrollment-count',
+      '[data-student-count]'
+    ];
+
+    for (const selector of studentCountSelectors) {
+      const countElement = this.safeQuery(selector);
+      if (countElement) {
+        const countText = this.safeTextContent(countElement);
+        const countMatch = countText.match(/(\d+)/);
+        if (countMatch) {
+          data.stats.studentCount = parseInt(countMatch[1]);
+        }
         break;
       }
     }
 
-    console.log('Course extraction completed:', data);
-    return data;
+    // Course status
+    const statusSelectors = [
+      '.course-status',
+      '.published-status',
+      '[data-course-status]'
+    ];
+
+    for (const selector of statusSelectors) {
+      const statusElement = this.safeQuery(selector);
+      if (statusElement) {
+        data.stats.status = this.safeTextContent(statusElement);
+        break;
+      }
+    }
   }
 
   /**
@@ -364,3 +535,4 @@ try {
   console.error('❌ Data extractor test failed:', error);
 }
 // Force reload Thu Aug 28 16:04:17 PDT 2025
+// Force reload Thu Aug 28 16:17:12 PDT 2025

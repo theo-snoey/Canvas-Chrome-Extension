@@ -119,28 +119,97 @@ function displayDashboardData(data) {
 }
 
 /**
- * Display course data
+ * Display course data - Enhanced for Phase 3.2
  */
 function displayCourseData(data) {
   let html = '';
 
-  if (data.courseInfo && data.courseInfo.name) {
+  // Course Information
+  if (data.courseInfo && (data.courseInfo.name || data.courseInfo.code || data.courseInfo.id)) {
     html += `
       <div class="data-item">
         <h4>Course Information</h4>
-        <p><strong>Name:</strong> <span class="value">${data.courseInfo.name}</span></p>
-      </div>
     `;
+    if (data.courseInfo.name) {
+      html += `<p><strong>Name:</strong> <span class="value">${data.courseInfo.name}</span></p>`;
+    }
+    if (data.courseInfo.code) {
+      html += `<p><strong>Code:</strong> <span class="value">${data.courseInfo.code}</span></p>`;
+    }
+    if (data.courseInfo.id) {
+      html += `<p><strong>ID:</strong> <span class="value">${data.courseInfo.id}</span></p>`;
+    }
+    if (data.courseInfo.term) {
+      html += `<p><strong>Term:</strong> <span class="value">${data.courseInfo.term}</span></p>`;
+    }
+    html += `</div>`;
   }
 
+  // Instructor Information
+  if (data.instructor && (data.instructor.name || data.instructor.email)) {
+    html += `
+      <div class="data-item">
+        <h4>Instructor</h4>
+    `;
+    if (data.instructor.name) {
+      html += `<p><strong>Name:</strong> <span class="value">${data.instructor.name}</span></p>`;
+    }
+    if (data.instructor.email) {
+      html += `<p><strong>Email:</strong> <span class="value">${data.instructor.email}</span></p>`;
+    }
+    html += `</div>`;
+  }
+
+  // Navigation Menu
   if (data.navigation && data.navigation.length > 0) {
     html += `
       <div class="data-item">
         <h4>Navigation (${data.navigation.length})</h4>
     `;
     data.navigation.forEach(nav => {
-      html += `<p>${nav.active ? '→ ' : ''}<strong>${nav.text}</strong></p>`;
+      const activeIndicator = nav.active ? '→ ' : '';
+      const icon = nav.icon ? `<i class="${nav.icon}"></i> ` : '';
+      html += `<p>${activeIndicator}${icon}<strong>${nav.text}</strong></p>`;
     });
+    html += `</div>`;
+  }
+
+  // Course Announcements
+  if (data.announcements && data.announcements.length > 0) {
+    html += `
+      <div class="data-item">
+        <h4>Announcements (${data.announcements.length})</h4>
+    `;
+    data.announcements.forEach(announcement => {
+      html += `<p><strong>${announcement.title}</strong></p>`;
+      if (announcement.author) {
+        html += `<p class="value">By: ${announcement.author}</p>`;
+      }
+      if (announcement.date) {
+        html += `<p class="value">Date: ${announcement.date}</p>`;
+      }
+      if (announcement.content) {
+        const truncatedContent = announcement.content.length > 100 
+          ? announcement.content.substring(0, 100) + '...' 
+          : announcement.content;
+        html += `<p class="value">${truncatedContent}</p>`;
+      }
+    });
+    html += `</div>`;
+  }
+
+  // Course Statistics
+  if (data.stats && (data.stats.studentCount || data.stats.status)) {
+    html += `
+      <div class="data-item">
+        <h4>Course Statistics</h4>
+    `;
+    if (data.stats.studentCount) {
+      html += `<p><strong>Students:</strong> <span class="value">${data.stats.studentCount}</span></p>`;
+    }
+    if (data.stats.status) {
+      html += `<p><strong>Status:</strong> <span class="value">${data.stats.status}</span></p>`;
+    }
     html += `</div>`;
   }
 

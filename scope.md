@@ -65,16 +65,16 @@ Canvas-chr-ext/
 - [x] Build data extraction utilities
 - [x] Create content parsing functions
 
-### **3.2 Canvas-Specific Scrapers**
+### **3.2 Canvas-Specific Scrapers** ✅ **COMPLETED**
 **Dashboard Scraper:**
-- [ ] Extract enrolled courses list
-- [ ] Get course names, IDs, and status
-- [ ] Scrape recent activity/notifications
+- [x] Extract enrolled courses list
+- [x] Get course names, IDs, and status
+- [x] Scrape recent activity/notifications
 
 **Course Page Scraper:**
-- [ ] Extract course information (name, code, instructor)
-- [ ] Get navigation menu items
-- [ ] Scrape course announcements
+- [x] Extract course information (name, code, instructor)
+- [x] Get navigation menu items
+- [x] Scrape course announcements
 
 **Assignments Scraper:**
 - [ ] Extract assignment list with due dates
