@@ -181,33 +181,20 @@ class CanvasDataExtractor {
       const courseElements = this.safeQueryAll(selector);
       if (courseElements.length > 0) {
         console.log(`Found ${courseElements.length} courses using selector: ${selector}`);
-        console.log('🔍 Starting detailed course processing...');
-        
         data.courses = courseElements.map((course, index) => {
-          console.log(`Processing course ${index + 1}:`, course);
-          
           // Try multiple methods to get course name
           const nameElement = this.safeQuery('.course-name, .course-title, h3, h4, .ic-DashboardCard__header_title', course);
           const codeElement = this.safeQuery('.course-code, .course-subtitle, .subtitle', course);
           const linkElement = this.safeQuery('a', course);
           
-          console.log(`  - nameElement:`, nameElement);
-          console.log(`  - codeElement:`, codeElement);
-          console.log(`  - linkElement:`, linkElement);
-          
           // Get name from aria-label if nameElement is null
           let name = this.safeTextContent(nameElement);
           if (!name) {
             name = this.safeAttribute(course, 'aria-label') || '';
-            console.log(`  - using aria-label for name: "${name}"`);
           }
           
           const code = this.safeTextContent(codeElement);
           const url = this.safeAttribute(linkElement, 'href') || this.safeAttribute(course, 'href');
-          
-          console.log(`  - final extracted name: "${name}"`);
-          console.log(`  - final extracted code: "${code}"`);
-          console.log(`  - final extracted url: "${url}"`);
           
           return {
             name: name,
