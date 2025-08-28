@@ -117,7 +117,7 @@ class CanvasDataExtractor {
   }
 
   /**
-   * Extract data from the current Canvas page
+   * Extract data from the current Canvas page - Enhanced with Data Processing Pipeline
    */
   async extractCurrentPage() {
     try {
@@ -125,6 +125,19 @@ class CanvasDataExtractor {
       this.currentPageType = pageType;
 
       console.log(`Extracting data for page type: ${pageType}`);
+
+      // Check if we have a data processor available
+      const processor = window.CanvasDataProcessor ? new window.CanvasDataProcessor() : null;
+      
+      // Check cache first if processor is available
+      if (processor) {
+        const cachedData = processor.getCachedData(pageType);
+        if (cachedData) {
+          console.log('Using cached data for:', pageType);
+          this.extractedData = cachedData.data;
+          return cachedData;
+        }
+      }
 
       let extractedData = null;
 
@@ -142,12 +155,22 @@ class CanvasDataExtractor {
 
       this.extractedData = extractedData;
 
-      return {
+      const rawResult = {
         pageType: pageType,
         data: extractedData,
         timestamp: new Date().toISOString(),
         url: window.location.href
       };
+
+      // Process data through pipeline if processor is available
+      if (processor) {
+        console.log('Processing extracted data through pipeline...');
+        const processedResult = await processor.processData(extractedData, pageType);
+        return processedResult;
+      }
+
+      // Return raw data if no processor
+      return rawResult;
 
     } catch (error) {
       console.error('Data extraction failed:', error);

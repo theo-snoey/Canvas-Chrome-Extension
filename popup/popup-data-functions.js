@@ -53,24 +53,34 @@ async function refreshExtractedData() {
 function displayExtractedData(data) {
   const extractedDataDiv = document.getElementById('extractedData');
 
+  console.log('🔍 Debug: Displaying extracted data:', data);
+
   if (!data || !data.data) {
     extractedDataDiv.innerHTML = '<p class="no-data">No data extracted yet. Navigate to a Canvas page to see extracted content.</p>';
     return;
   }
 
   const pageData = data.data;
+  console.log('🔍 Debug: Page data:', pageData);
+  console.log('🔍 Debug: Data type:', data.type || data.pageType);
+  
   let html = '';
 
   html += `
     <div class="data-item">
       <h4>Page Information</h4>
-      <p><strong>Type:</strong> <span class="value">${data.pageType || 'Unknown'}</span></p>
+      <p><strong>Type:</strong> <span class="value">${data.type || data.pageType || 'Unknown'}</span></p>
       <p><strong>Extracted:</strong> <span class="value">${new Date(data.timestamp).toLocaleString()}</span></p>
       <p><strong>URL:</strong> <span class="value">${data.url || 'Unknown'}</span></p>
+      ${data.metadata?.dataQuality ? `<p><strong>Data Quality:</strong> <span class="value">${data.metadata.dataQuality}%</span></p>` : ''}
+      ${data.metadata?.processingVersion ? `<p><strong>Processing:</strong> <span class="value">v${data.metadata.processingVersion}</span></p>` : ''}
     </div>
   `;
 
-  switch (data.pageType) {
+  // Handle both old and new data structure
+  const pageType = data.type || data.pageType;
+  
+  switch (pageType) {
     case 'dashboard':
       html += displayDashboardData(pageData);
       break;

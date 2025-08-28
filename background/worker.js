@@ -547,22 +547,39 @@ chrome.action.onClicked.addListener((tab) => {
 let lastExtractedData = null;
 
 /**
- * Handle data extraction from content script
+ * Handle data extraction from content script - Enhanced for Phase 3.3
  */
 function handleDataExtracted(extractedData, sender) {
   console.log('Data extracted from Canvas page:', extractedData);
   lastExtractedData = extractedData;
   
-  // Store in chrome.storage for persistence
-  chrome.storage.local.set({
+  // Enhanced storage with processing metadata
+  const storageData = {
     lastExtractedData: extractedData,
-    lastExtractionTime: new Date().toISOString()
-  });
+    lastExtractionTime: new Date().toISOString(),
+    processingVersion: extractedData.metadata?.processingVersion || '1.0.0',
+    dataQuality: extractedData.metadata?.dataQuality || 0,
+    pageType: extractedData.type || 'unknown'
+  };
+  
+  // Store in chrome.storage for persistence
+  chrome.storage.local.set(storageData);
+
+  // Log data quality metrics
+  if (extractedData.metadata?.dataQuality) {
+    console.log(`Data quality score: ${extractedData.metadata.dataQuality}%`);
+  }
+
+  // Log cache and processing stats
+  if (extractedData.summary) {
+    console.log('Data summary:', extractedData.summary);
+  }
 
   // Notify popup if it's open
   chrome.runtime.sendMessage({
     action: 'DATA_EXTRACTION_COMPLETED',
-    data: extractedData
+    data: extractedData,
+    quality: extractedData.metadata?.dataQuality || 0
   }).catch(() => {
     // Popup might not be open, ignore error
   });
