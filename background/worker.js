@@ -418,6 +418,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       return true;
 
+    case 'DATA_EXTRACTED':
+      handleDataExtracted(request.data, sender);
+      sendResponse({ success: true });
+      break;
+
+    case 'GET_EXTRACTED_DATA':
+      sendResponse({ success: true, data: getLastExtractedData() });
+      break;
+
     default:
       sendResponse({ error: 'Unknown action' });
   }
@@ -533,5 +542,37 @@ chrome.action.onClicked.addListener((tab) => {
     }, 3000);
   }
 });
+
+// Global data storage
+let lastExtractedData = null;
+
+/**
+ * Handle data extraction from content script
+ */
+function handleDataExtracted(extractedData, sender) {
+  console.log('Data extracted from Canvas page:', extractedData);
+  lastExtractedData = extractedData;
+  
+  // Store in chrome.storage for persistence
+  chrome.storage.local.set({
+    lastExtractedData: extractedData,
+    lastExtractionTime: new Date().toISOString()
+  });
+
+  // Notify popup if it's open
+  chrome.runtime.sendMessage({
+    action: 'DATA_EXTRACTION_COMPLETED',
+    data: extractedData
+  }).catch(() => {
+    // Popup might not be open, ignore error
+  });
+}
+
+/**
+ * Get the last extracted data
+ */
+function getLastExtractedData() {
+  return lastExtractedData;
+}
 
 console.log('Canvas Assistant background service worker fully initialized');

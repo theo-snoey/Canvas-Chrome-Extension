@@ -160,6 +160,84 @@ body {
   cursor: not-allowed;
 }
 
+/* Data Section Styles */
+.data-section {
+  padding: 16px;
+  border-top: 2px solid #e5e7eb;
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+
+.data-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.data-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.refresh-button {
+  background: #28a745;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.2s;
+}
+
+.refresh-button:hover {
+  background: #218838;
+}
+
+.data-content {
+  background: white;
+  border-radius: 4px;
+  border: 1px solid #dee2e6;
+  padding: 15px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.no-data {
+  color: #6c757d;
+  font-style: italic;
+  text-align: center;
+  margin: 0;
+}
+
+.data-item {
+  margin-bottom: 15px;
+  padding: 10px;
+  background: #f8f9fa;
+  border-left: 3px solid #007bff;
+  border-radius: 4px;
+}
+
+.data-item h4 {
+  margin: 0 0 8px 0;
+  color: #495057;
+  font-size: 14px;
+}
+
+.data-item p {
+  margin: 0 0 5px 0;
+  color: #6c757d;
+  font-size: 12px;
+}
+
+.data-item .value {
+  color: #212529;
+  font-weight: 500;
+}
+
 /* Test Section Styles */
 .test-section {
   padding: 16px;

@@ -394,11 +394,18 @@ async function initializeContentScript() {
 
     console.log('Page analysis:', currentPageInfo);
 
-    // Send page information to background script
-    await sendPageInfoToBackground(currentPageInfo);
+    // Send page information to background script (non-blocking)
+    console.log('📤 About to send page info to background...');
+    sendPageInfoToBackground(currentPageInfo).then(() => {
+      console.log('✅ Page info sent successfully');
+    }).catch(error => {
+      console.warn('⚠️ Failed to send page info to background (non-critical):', error.message);
+    });
 
     // Initialize page-specific features
+    console.log('🎯 About to call initializePageFeatures...');
     await initializePageFeatures(currentPageInfo);
+    console.log('✅ initializePageFeatures completed');
 
     // Set up periodic updates for dynamic content
     setInterval(updatePageInfo, 5000);
@@ -428,9 +435,15 @@ async function sendPageInfoToBackground(pageInfo) {
  * Initialize page-specific features based on page type
  */
 async function initializePageFeatures(pageInfo) {
+  console.log('🚀 initializePageFeatures called with:', pageInfo);
   const { pageType } = pageInfo.detection;
 
   console.log(`Initializing features for page type: ${pageType}`);
+
+  // Initialize data extraction for all Canvas pages
+  console.log('About to initialize data extraction...');
+  await initializeDataExtraction(pageInfo);
+  console.log('Data extraction initialization completed');
 
   switch (pageType) {
     case 'dashboard':
@@ -451,6 +464,42 @@ async function initializePageFeatures(pageInfo) {
 
   // Inject floating chat button for all Canvas pages
   injectChatInterface();
+}
+
+/**
+ * Initialize data extraction for all Canvas pages
+ */
+async function initializeDataExtraction(pageInfo) {
+  try {
+    console.log('Initializing automatic data extraction...');
+    
+    // Create data extractor instance
+    const dataExtractor = new CanvasDataExtractor();
+    
+    // Extract data from current page
+    const extractedData = await dataExtractor.extractCurrentPage();
+    
+    if (extractedData) {
+      console.log('🎯 Automatic data extraction successful:', extractedData);
+      
+      // Send extracted data to background script
+      chrome.runtime.sendMessage({
+        action: 'DATA_EXTRACTED',
+        data: extractedData
+      }).catch(error => {
+        console.warn('Could not send extracted data to background:', error.message);
+      });
+
+      // Store data locally for quick access
+      window.lastExtractedData = extractedData;
+      
+    } else {
+      console.warn('⚠️ Automatic data extraction returned no data');
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to initialize automatic data extraction:', error);
+  }
 }
 
 /**

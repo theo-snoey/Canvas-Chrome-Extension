@@ -30,6 +30,17 @@
       <button id="sendButton" disabled>Send</button>
     </div>
 
+    <!-- Data Extraction Section -->
+    <div class="data-section" id="dataSection">
+      <div class="data-header">
+        <h3>📊 Extracted Data</h3>
+        <button id="refreshDataButton" class="refresh-button">🔄 Refresh</button>
+      </div>
+      <div id="extractedData" class="data-content">
+        <p class="no-data">No data extracted yet. Navigate to a Canvas page to see extracted content.</p>
+      </div>
+    </div>
+
     <!-- Test Section (only visible in development) -->
     <div class="test-section" id="testSection" style="display: none;">
       <div class="test-header">
@@ -41,5 +52,6 @@
   </div>
 
   <script src="popup.js"></script>
+  <script src="popup-data-functions.js"></script>
 </body>
 </html>

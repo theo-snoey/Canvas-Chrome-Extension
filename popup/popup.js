@@ -19,6 +19,12 @@ function initializePopup() {
     }
   });
 
+  // Add refresh data button event listener
+  const refreshDataButton = document.getElementById('refreshDataButton');
+  if (refreshDataButton) {
+    refreshDataButton.addEventListener('click', refreshExtractedData);
+  }
+
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener(handleBackgroundMessage);
 
