@@ -10,6 +10,8 @@ class CanvasNLPProcessor {
       SCHEDULE: 'schedule',
       ANNOUNCEMENTS: 'announcements',
       DISCUSSIONS: 'discussions',
+      SYLLABUS: 'syllabus',
+      QUIZZES: 'quizzes',
       HELP: 'help',
       GREETING: 'greeting',
       GOODBYE: 'goodbye',
@@ -91,6 +93,16 @@ class CanvasNLPProcessor {
         ],
         weight: 0.8
       },
+      [this.intents.SYLLABUS]: {
+        keywords: ['syllabus'],
+        phrases: ['show the syllabus', 'course syllabus', 'syllabus for'],
+        weight: 0.9
+      },
+      [this.intents.QUIZZES]: {
+        keywords: ['quiz', 'quizzes', 'test', 'exam'],
+        phrases: ['what quizzes', 'show quizzes', 'quizzes due'],
+        weight: 0.9
+      },
       [this.intents.GREETING]: {
         keywords: ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening'],
         phrases: [
@@ -118,8 +130,8 @@ class CanvasNLPProcessor {
         phrases: [
           'goodbye',
           'see you later',
-          'thanks for help',
-          'that\'s all'
+          "thanks for help",
+          "that's all"
         ],
         weight: 0.5
       }
@@ -129,10 +141,22 @@ class CanvasNLPProcessor {
     this.parameterPatterns = {
       courseName: {
         patterns: [
+          // Any text in quotes (double/single/smart quotes) - HIGHEST PRIORITY
+          /["""''']([^"""''']+)["""''']/g,
+          // Specific patterns for quizzes/assignments with "in" or "for"
+          /(?:quizzes?|assignments?|syllabus)\s+(?:for|in)\s+["""'''"]?([^"""'''?\n]+?)["""'''"]?(?:\?|$)/gi,
+          // What quizzes do I have in <Course Name>
+          /(?:what|show|list)\s+(?:quizzes?|assignments?)\s+.*?(?:in|for)\s+["""'''"]?([^"""'''?\n]{3,}?)["""'''"]?(?:\?|$)/gi,
+          // Course codes like MATH 101
           /(?:in|for|from)\s+([A-Z]{2,4}\s*\d{3}[A-Z]?)/gi,
-          /(?:in|for|from)\s+"([^"]+)"/gi,
           /(?:course|class)\s+([A-Z]{2,4}\s*\d{3}[A-Z]?)/gi,
-          /([A-Z]{2,4}\s*\d{3}[A-Z]?)/g
+          /([A-Z]{2,4}\s*\d{3}[A-Z]?)/g,
+          // Year + descriptive name patterns like "2025 French Placement"
+          /(?:in|for)\s+(\d{4}\s+[A-Za-z][A-Za-z\s]{2,})/gi,
+          // Direct match for "2025 French Placement" style patterns
+          /(?:in|for|have in)\s+['""]?(\d{4}\s+[A-Za-z]+(?:\s+[A-Za-z]+)*)['""]?/gi,
+          // Generic: for/in <Course Name> (catch-all)
+          /(?:for|in)\s+([A-Za-z][A-Za-z0-9()&,''"\-: ]{2,}?)(?:\s*\?|$)/gi
         ]
       },
       timeFrame: {
@@ -281,19 +305,27 @@ class CanvasNLPProcessor {
   extractParameters(query) {
     const parameters = {};
     
+    console.log('🔍 Extracting parameters from query:', query);
+    
     for (const [paramType, config] of Object.entries(this.parameterPatterns)) {
       const matches = [];
       
       for (const pattern of config.patterns) {
         const found = [...query.matchAll(pattern)];
-        matches.push(...found.map(match => match[1] || match[0]));
+        const patternMatches = found.map(match => match[1] || match[0]);
+        if (patternMatches.length > 0) {
+          console.log(`🔍 Pattern ${pattern} matched:`, patternMatches);
+        }
+        matches.push(...patternMatches);
       }
       
       if (matches.length > 0) {
         parameters[paramType] = [...new Set(matches)]; // Remove duplicates
+        console.log(`🔍 Final ${paramType} parameter:`, parameters[paramType]);
       }
     }
     
+    console.log('🔍 All extracted parameters:', parameters);
     return parameters;
   }
 
@@ -355,6 +387,12 @@ class CanvasNLPProcessor {
         
       case this.intents.DISCUSSIONS:
         return await this.generateDiscussionsResponse(parameters, canvasData);
+        
+      case this.intents.SYLLABUS:
+        return await this.generateSyllabusResponse(parameters, canvasData);
+
+      case this.intents.QUIZZES:
+        return await this.generateQuizzesResponse(parameters, canvasData);
         
       case this.intents.HELP:
         return this.generateHelpResponse();
@@ -540,10 +578,26 @@ class CanvasNLPProcessor {
 
     // Collect all assignments from various sources
     const allAssignments = [];
+
+    // Helper to normalize a date-like field
+    const normalizeDate = (val) => {
+      if (!val) return '';
+      try {
+        if (val instanceof Date) return val.toISOString();
+        // Some sources store timestamp strings or numbers
+        const d = typeof val === 'number' ? new Date(val) : new Date(String(val));
+        if (!isNaN(d.getTime())) return d.toISOString();
+      } catch {}
+      // Try to parse simple textual forms like "Due: Tue" by falling back to today
+      return '';
+    };
     
     // Add assignments from direct assignment data
     if (canvasData.assignments && Array.isArray(canvasData.assignments)) {
-      allAssignments.push(...canvasData.assignments);
+      allAssignments.push(...canvasData.assignments.map(a => ({
+        ...a,
+        dueDate: a.dueDate || a.due || a.due_at || normalizeDate(a.startDate || a.endDate)
+      })));
     }
     
     // Add assignments from todo list
@@ -558,7 +612,7 @@ class CanvasNLPProcessor {
         ...item,
         name: item.title,
         courseName: item.courseName,
-        dueDate: item.dueDate,
+        dueDate: item.dueDate || item.datetime || normalizeDate(item.startDate || item.endDate),
         isFromTodo: true
       })));
     }
@@ -573,7 +627,7 @@ class CanvasNLPProcessor {
       allAssignments.push(...calendarAssignments.map(event => ({
         ...event,
         name: event.title,
-        dueDate: event.startDate || event.endDate,
+        dueDate: normalizeDate(event.startDate || event.endDate || event.datetime),
         isFromCalendar: true
       })));
     }
@@ -596,7 +650,6 @@ class CanvasNLPProcessor {
       
       filteredAssignments = filteredAssignments.filter(assignment => {
         if (!assignment.dueDate) return false;
-        
         const dueDate = new Date(assignment.dueDate);
         
         switch (timeFrame) {
@@ -699,11 +752,35 @@ class CanvasNLPProcessor {
    * Generate courses response
    */
   async generateCoursesResponse(parameters, canvasData) {
-    if (!canvasData || !canvasData.courses) {
+    if (!canvasData) {
       return "I don't have access to your course data at the moment. Please make sure you're logged into Canvas and the autonomous data collection is running.";
     }
 
-    if (canvasData.courses.length === 0) {
+    // Synthesize courses from any available data if missing
+    let courses = Array.isArray(canvasData.courses) ? [...canvasData.courses] : [];
+    const addCourse = (id, name) => {
+      if (!name) return;
+      if (!courses.some(c => (c.id && id && c.id === id) || (c.name && c.name === name))) {
+        courses.push({ id, name });
+      }
+    };
+    // From assignments
+    if (Array.isArray(canvasData.assignments)) {
+      canvasData.assignments.forEach(a => addCourse(a.courseId, a.courseName));
+    }
+    // From grades
+    if (Array.isArray(canvasData.grades)) {
+      canvasData.grades.forEach(g => addCourse(g.courseId, g.courseName));
+    }
+    // From announcements/discussions
+    if (Array.isArray(canvasData.announcements)) {
+      canvasData.announcements.forEach(x => addCourse(x.courseId, x.courseName));
+    }
+    if (Array.isArray(canvasData.discussions)) {
+      canvasData.discussions.forEach(x => addCourse(x.courseId, x.courseName));
+    }
+
+    if (courses.length === 0) {
       return "I don't see any courses in your current data. This might mean:\n• You're not enrolled in any courses this semester\n• The autonomous data collection hasn't run recently\n• You might need to visit your Canvas dashboard to refresh the data";
     }
 
@@ -753,7 +830,7 @@ class CanvasNLPProcessor {
     }
 
     // Show all courses
-    canvasData.courses.forEach((course, index) => {
+    courses.forEach((course, index) => {
       const name = course.name || course.title || 'Unnamed Course';
       const instructor = course.instructor ? ` - ${course.instructor.name || course.instructor}` : '';
       const term = course.term ? ` (${course.term})` : '';
@@ -869,11 +946,202 @@ class CanvasNLPProcessor {
     return response;
   }
 
-  /**
-   * Generate discussions response
-   */
-  async generateDiscussionsResponse(parameters, canvasData) {
-    return "I can help you with discussion boards! I have access to your Canvas discussion data and I'm developing features to summarize discussion threads, highlight important posts, and help you participate more effectively.";
+  // New: Syllabus
+  async generateSyllabusResponse(parameters, canvasData) {
+    const courses = canvasData?.courses || [];
+    const syllabi = canvasData?.syllabi || [];
+
+    let courseName = parameters.courseName?.[0];
+    if (!courseName && courses.length === 1) {
+      courseName = courses[0].name || courses[0].title;
+    }
+
+    if (!courseName) {
+      return "Which course? Try: 'Show the syllabus for \"Course Name\"'";
+    }
+
+    const target = courseName.toLowerCase();
+    const matchingCourse = courses.find(c =>
+      c.name?.toLowerCase().includes(target) ||
+      c.title?.toLowerCase().includes(target) ||
+      c.id?.toLowerCase?.()?.includes(target)
+    );
+
+    // Try direct syllabus match
+    let syllabus = null;
+    if (matchingCourse) {
+      const courseId = matchingCourse.id;
+      syllabus = syllabi.find(s => s.courseId === courseId) || null;
+    }
+
+    if (!syllabus && syllabi.length > 0) {
+      syllabus = syllabi.find(s => (s.courseName || '').toLowerCase().includes(target));
+    }
+
+    if (syllabus?.content) {
+      const snippet = syllabus.content.substring(0, 600);
+      return `📘 **Syllabus for ${courseName}:**\n\n${snippet}${syllabus.content.length > 600 ? '...' : ''}`;
+    }
+
+    // Provide a direct URL fallback
+    if (matchingCourse?.id) {
+      return `I couldn't read the syllabus content, but you can open it here:\nhttps://canvas.stanford.edu/courses/${matchingCourse.id}/assignments/syllabus`;
+    }
+
+    return `I couldn't find the syllabus for "${courseName}". Try opening the course once so I can cache it.`;
+  }
+
+  // New: Quizzes (filter assignments)
+  async generateQuizzesResponse(parameters, canvasData) {
+    console.log('🧪 Starting quiz filtering with parameters:', parameters);
+    console.log('🧪 Canvas data keys available:', Object.keys(canvasData || {}));
+    
+    // If course name is specified, try to get assignments specifically for that course
+    let assignments = canvasData?.assignments || [];
+    
+    if (parameters.courseName && parameters.courseName.length > 0) {
+      const targetRaw = parameters.courseName[0];
+      const courses = canvasData?.courses || [];
+      const matchCourse = courses.find(c => {
+        const courseName = (c.name || c.title || '').toLowerCase().replace(/[^a-z0-9\s]+/g, '').trim();
+        const target = targetRaw.toLowerCase().replace(/[^a-z0-9\s]+/g, '').trim();
+        return courseName === target || courseName.includes(target) || target.includes(courseName);
+      });
+      
+      if (matchCourse && matchCourse.id) {
+        console.log('🧪 Found target course:', matchCourse);
+        // Try to get course-specific assignments from storage
+        try {
+          const allData = await chrome.storage.local.get();
+          const courseAssignments = [];
+          
+          for (const [key, value] of Object.entries(allData)) {
+            if (key.includes(`course-assignments_${matchCourse.id}`) && value?.data?.items) {
+              console.log('🧪 Found course-specific assignments in:', key);
+              // Add course info to each assignment
+              const assignmentsWithCourse = value.data.items.map(a => ({
+                ...a,
+                courseName: matchCourse.name,
+                courseId: matchCourse.id,
+                _fromCourseStorage: true
+              }));
+              courseAssignments.push(...assignmentsWithCourse);
+            }
+          }
+          
+          if (courseAssignments.length > 0) {
+            console.log('🧪 Using course-specific assignments:', courseAssignments.length);
+            assignments = courseAssignments;
+          }
+        } catch (error) {
+          console.warn('🧪 Failed to get course-specific assignments:', error);
+        }
+      }
+    }
+    
+    console.log('🧪 Total assignments found:', assignments.length);
+    
+    if (assignments.length === 0) {
+      return "I don't see any assignment data yet. Try: 'What assignments do I have?' first.";
+    }
+
+    // Helper to normalize strings for fuzzy match
+    const norm = (s) => (s || '').toString().toLowerCase().replace(/[^a-z0-9\s]+/g, '').trim();
+
+    // First, find all quiz-like assignments
+    let quizAssignments = assignments.filter(a => {
+      const name = norm(a.name || a.title || '');
+      const type = norm(a.type || '');
+      
+      const isQuiz = type.includes('quiz') || 
+                    name.includes('quiz') || 
+                    name.includes('exam') || 
+                    name.includes('test') ||
+                    name.includes('assessment');
+      
+      console.log(`🧪 Assignment "${a.name || a.title}" - Type: "${type}", Name normalized: "${name}", Is Quiz: ${isQuiz}`);
+      return isQuiz;
+    });
+
+    console.log('🧪 Quiz assignments found:', quizAssignments.length);
+
+    // If course name is specified, filter by course
+    if (parameters.courseName && parameters.courseName.length > 0) {
+      const targetRaw = parameters.courseName[0];
+      const target = norm(targetRaw);
+      
+      console.log('🧪 Filtering for course:', targetRaw, '(normalized:', target + ')');
+
+      // Get all courses for reference
+      const courses = canvasData?.courses || [];
+      console.log('🧪 Available courses:', courses.map(c => ({
+        name: c.name || c.title,
+        id: c.id,
+        normalized: norm(c.name || c.title || '')
+      })));
+
+      // Find matching course
+      const matchCourse = courses.find(c => {
+        const courseName = norm(c.name || c.title || '');
+        return courseName === target || 
+               courseName.includes(target) || 
+               target.includes(courseName);
+      });
+      
+      console.log('🧪 Matched course:', matchCourse);
+
+      // Filter quizzes by course
+      quizAssignments = quizAssignments.filter(a => {
+        const assignmentCourseName = norm(a.courseName || '');
+        const assignmentCourseId = a.courseId;
+        const assignmentUrl = a.url || '';
+        
+        // Match by course name
+        const nameMatch = assignmentCourseName.includes(target) || target.includes(assignmentCourseName);
+        
+        // Match by course ID if we found a matching course
+        const idMatch = matchCourse && matchCourse.id && (assignmentCourseId === matchCourse.id || assignmentCourseId === String(matchCourse.id));
+        
+        // Match by URL if course ID is available - check for the course ID in the URL
+        const urlMatch = matchCourse && matchCourse.id && 
+                        assignmentUrl.includes(`/courses/${matchCourse.id}/`);
+
+        // ADDITIONAL: Check if assignment is from a storage key that contains the course ID
+        // This handles cases where assignments don't have courseName/courseId but are stored by course
+        const storageKeyMatch = matchCourse && matchCourse.id && 
+                               (a._storageKey || '').includes(`_${matchCourse.id}_`);
+
+        console.log(`🧪 Quiz "${a.name || a.title}" - Course: "${assignmentCourseName}", ID: "${assignmentCourseId}", URL: "${assignmentUrl}", Name Match: ${nameMatch}, ID Match: ${idMatch}, URL Match: ${urlMatch}, Storage Match: ${storageKeyMatch}`);
+        
+        return nameMatch || idMatch || urlMatch || storageKeyMatch;
+      });
+
+      console.log('🧪 Quizzes after course filtering:', quizAssignments.length);
+    }
+
+    if (quizAssignments.length === 0) {
+      const courseText = parameters.courseName ? ` for "${parameters.courseName[0]}"` : '';
+      return `I don't see any quizzes${courseText}. Available assignments: ${assignments.slice(0, 3).map(a => a.name || a.title).join(', ')}${assignments.length > 3 ? '...' : ''}`;
+    }
+
+    // Sort by due date if available
+    quizAssignments.sort((a, b) => {
+      const dateA = a.dueDate ? new Date(a.dueDate) : new Date(0);
+      const dateB = b.dueDate ? new Date(b.dueDate) : new Date(0);
+      return dateA - dateB;
+    });
+
+    const courseText = parameters.courseName ? ` in ${parameters.courseName[0]}` : '';
+    const list = quizAssignments.slice(0, 10).map((q, i) => {
+      const name = q.name || q.title || 'Unnamed Quiz';
+      const course = q.courseName ? ` (${q.courseName})` : '';
+      const dueDate = q.dueDate ? ` - Due: ${new Date(q.dueDate).toLocaleDateString()}` : '';
+      return `${i + 1}. **${name}**${course}${dueDate}`;
+    }).join('\n');
+
+    const moreText = quizAssignments.length > 10 ? `\n\n... and ${quizAssignments.length - 10} more quizzes.` : '';
+    
+    return `🧪 **Quizzes${courseText} (${quizAssignments.length} found):**\n\n${list}${moreText}`;
   }
 
   /**
@@ -885,6 +1153,8 @@ class CanvasNLPProcessor {
 📊 **Grades**: Ask about your current grades, GPA, or what you need on upcoming assignments
 📋 **Assignments**: Check what's due, get assignment details, and manage deadlines  
 📚 **Courses**: Get information about your enrolled courses
+📘 **Syllabus**: "Show the syllabus for \"Course Name\""  
+🧪 **Quizzes**: "What quizzes do I have in \"Course Name\"?"  
 📅 **Schedule**: View your class schedule and upcoming events
 📢 **Announcements**: Stay updated with the latest course announcements
 💬 **Discussions**: Get help with discussion boards and forums
@@ -959,6 +1229,15 @@ Could you try rephrasing your question or asking something like:
         suggestions.push("Show assignments due this week");
         suggestions.push("Help me prioritize my tasks");
         suggestions.push("Create a study schedule");
+        break;
+        
+      case this.intents.SYLLABUS:
+        suggestions.push("Open the course syllabus page");
+        break;
+
+      case this.intents.QUIZZES:
+        suggestions.push("Quizzes due this week");
+        suggestions.push("Quizzes in [Course Name]");
         break;
         
       case this.intents.COURSES:

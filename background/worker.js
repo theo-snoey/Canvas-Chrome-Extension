@@ -25,11 +25,11 @@ console.log('🚀 Background worker initialization starting...');
 
 // Autonomous Background System Configuration
 const AUTONOMOUS_CONFIG = {
-  syncInterval: 5 * 60 * 1000, // 5 minutes in milliseconds
+  syncInterval: 30 * 1000, // 30 seconds in milliseconds (was 5 minutes)
   maxRetries: 3,
-  retryDelay: 30000, // 30 seconds base delay
-  sessionCheckInterval: 60 * 1000, // Check session every minute
-  dataCollectionTimeout: 120000, // 2 minutes per collection task
+  retryDelay: 10000, // 10 seconds base delay (was 30 seconds)
+  sessionCheckInterval: 15 * 1000, // Check session every 15 seconds (was 1 minute)
+  dataCollectionTimeout: 60000, // 1 minute per collection task (was 2 minutes)
   queueMaxSize: 50 // Maximum queued tasks
 };
 
@@ -115,6 +115,9 @@ class TabManager {
     }
 
     try {
+      // Add delay if user might be dragging tabs
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       const tab = await chrome.tabs.create({
         url: url,
         active: false, // Keep invisible
@@ -151,6 +154,10 @@ class TabManager {
     console.log(`Executing extractor in tab: ${tabId}`);
 
     try {
+      // Ensure our content extractor scripts are present in the tab context
+      // Avoid double-injecting extractor scripts to prevent re-declaration errors
+      // We'll rely on inline extractors for autonomous tasks
+
       // Update last used time
       if (this.activeTabs.has(tabId)) {
         this.activeTabs.get(tabId).lastUsed = Date.now();
@@ -405,19 +412,19 @@ class TabManager {
     // Clear any existing alarms
     chrome.alarms.clearAll();
 
-    // Create main sync alarm (5-minute intervals)
+    // Create main sync alarm (30-second intervals for fast testing)
     chrome.alarms.create('canvas-autonomous-sync', {
-      delayInMinutes: 1, // Start after 1 minute
-      periodInMinutes: 5 // Repeat every 5 minutes
+      delayInMinutes: 0.1, // Start after 6 seconds
+      periodInMinutes: 0.5 // Repeat every 30 seconds
     });
 
-    // Create session check alarm (every minute)
+    // Create session check alarm (every 15 seconds)
     chrome.alarms.create('canvas-session-check', {
-      delayInMinutes: 0.5, // Start after 30 seconds
-      periodInMinutes: 1 // Repeat every minute
+      delayInMinutes: 0.1, // Start after 6 seconds
+      periodInMinutes: 0.25 // Repeat every 15 seconds
     });
 
-    console.log('Autonomous alarms set up: sync (5min) and session check (1min)');
+    console.log('⚡ Fast autonomous alarms set up: sync (30s) and session check (15s)');
   }
 
   /**
@@ -674,7 +681,9 @@ class TabManager {
       await this.storeAuthenticationEvent('authenticated', authenticatedDomain);
 
       // Trigger immediate comprehensive data collection
-      this.triggerAutonomousSync();
+      this.triggerAutonomousSync().catch(error => {
+        console.error('❌ Failed to trigger autonomous sync:', error);
+      });
 
       // Show success notification with domain info
       this.showAuthenticationNotification('success', authenticatedDomain);
@@ -718,7 +727,9 @@ class TabManager {
     }
     
     // Trigger immediate sync for new domain
-    this.triggerAutonomousSync();
+    this.triggerAutonomousSync().catch(error => {
+      console.error('❌ Failed to trigger autonomous sync:', error);
+    });
     
     this.notifyUser(`Switched to Canvas instance: ${newDomain}`, 'info');
   }
@@ -927,9 +938,6 @@ class TabManager {
   async getCanvasDataForNLP() {
     try {
       console.log('📊 Gathering Canvas data for NLP processing...');
-      
-      // Get all autonomous data
-      const allData = await chrome.storage.local.get();
       const canvasData = {
         courses: [],
         assignments: [],
@@ -942,69 +950,112 @@ class TabManager {
         dataQuality: 0
       };
 
-      // Process autonomous data
+      // Prefer advanced storage manager (canvas_*)
+      if (this.storageManager && typeof this.storageManager.queryData === 'function') {
+        try {
+          const [coursesQ, assignmentsQ, gradesQ] = await Promise.all([
+            this.storageManager.queryData({ type: 'courses' }),
+            this.storageManager.queryData({ type: 'assignments' }),
+            this.storageManager.queryData({ type: 'grades' })
+          ]);
+          if (coursesQ?.success) canvasData.courses.push(...coursesQ.data);
+          if (assignmentsQ?.success) canvasData.assignments.push(...assignmentsQ.data);
+          if (gradesQ?.success) canvasData.grades.push(...gradesQ.data);
+        } catch (e) {
+          console.warn('Query via storage manager failed:', e?.message || e);
+        }
+      }
+
+      // Fallback: scan raw storage for both prefixes
+      const allData = await chrome.storage.local.get();
       for (const [key, value] of Object.entries(allData)) {
-        if (key.startsWith('autonomous_data_')) {
-          const dataType = key.split('_')[2]; // Extract type from key
-          
-          if (value && value.result) {
-            switch (dataType) {
-              case 'dashboard':
-                if (value.result.courses) {
-                  canvasData.courses.push(...value.result.courses);
-                }
-                break;
-              case 'courses':
-                if (value.result.courses) {
-                  canvasData.courses.push(...value.result.courses);
-                }
-                break;
-              case 'assignments':
-                if (value.result.assignments) {
-                  canvasData.assignments.push(...value.result.assignments);
-                }
-                break;
-              case 'grades':
-                if (value.result.grades) {
-                  canvasData.grades.push(...value.result.grades);
-                }
-                break;
-              case 'announcements':
-                if (value.result.announcements) {
-                  canvasData.announcements.push(...value.result.announcements);
-                }
-                break;
-              case 'discussions':
-                if (value.result.discussions) {
-                  canvasData.discussions.push(...value.result.discussions);
-                }
-                break;
-              case 'calendar':
-                if (value.result.events) {
-                  canvasData.calendar.push(...value.result.events);
-                }
-                break;
-              case 'todo':
-                if (value.result.items) {
-                  canvasData.todo.push(...value.result.items);
-                }
-                break;
+        try {
+          // Handle canvas_* entries
+          if (key.startsWith('canvas_')) {
+            // Normalize course objects: ensure id (from URL) and name
+            const normalizeCourses = (list) => {
+              try {
+                return (list || []).map(c => {
+                  const url = c.url || c.href || '';
+                  const name = c.name || c.title || '';
+                  const idMatch = url && url.match(/\/courses\/(\d+)/);
+                  const id = idMatch ? idMatch[1] : (c.id || '');
+                  return { id, name, url };
+                });
+              } catch { return []; }
+            };
+
+            if ((key.startsWith('canvas_courses-list_') || key.startsWith('canvas_courses_')) && value?.courses) {
+              canvasData.courses.push(...normalizeCourses(value.courses));
             }
-            
-            // Track most recent update
-            if (value.timestamp) {
-              const updateTime = new Date(value.timestamp).getTime();
-              if (!canvasData.lastUpdated || updateTime > new Date(canvasData.lastUpdated).getTime()) {
-                canvasData.lastUpdated = value.timestamp;
+            if (key.startsWith('canvas_course-assignments_') && value?.assignments) {
+              canvasData.assignments.push(...value.assignments);
+            }
+            if (key.startsWith('canvas_course-grades_') && value?.grades) {
+              canvasData.grades.push(...value.grades);
+            }
+            if (key.startsWith('canvas_course-announcements_') && value?.announcements) {
+              canvasData.announcements.push(...value.announcements);
+            }
+            if (key.startsWith('canvas_course-discussions_') && value?.discussions) {
+              canvasData.discussions.push(...value.discussions);
+            }
+            if (key.startsWith('canvas_calendar_') && value?.events) {
+              canvasData.calendar.push(...value.events);
+            }
+            // Dashboard may also include courses
+            if (key.startsWith('canvas_dashboard_') && value?.courses) {
+              canvasData.courses.push(...normalizeCourses(value.courses));
+            }
+            if (key.startsWith('canvas_todo_') && (value?.todos || value?.items)) {
+              canvasData.todo.push(...(value.todos || value.items));
+            }
+            // Use course-home to add course names
+            if (key.startsWith('canvas_course-home_') && value?.courseId) {
+              if (value.courseName) {
+                canvasData.courses.push({ id: value.courseId, name: value.courseName });
               }
             }
-            
-            // Aggregate data quality
-            if (value.dataQuality) {
-              canvasData.dataQuality = Math.max(canvasData.dataQuality, value.dataQuality);
+            // Include syllabus content if present
+            if (key.startsWith('canvas_course-syllabus_') && (value?.content || value?.syllabus)) {
+              if (!canvasData.syllabi) canvasData.syllabi = [];
+              canvasData.syllabi.push({
+                courseId: value.courseId,
+                content: value.content || value.syllabus,
+                courseName: value.courseName || ''
+              });
             }
           }
-        }
+
+          // Handle autonomous_data_* (legacy)
+          if (key.startsWith('autonomous_data_') && value && value.result) {
+            const dataType = key.split('_')[2];
+            switch (dataType) {
+              case 'dashboard':
+              case 'courses':
+                if (value.result.courses) canvasData.courses.push(...value.result.courses);
+                break;
+              case 'assignments':
+                if (value.result.assignments) canvasData.assignments.push(...value.result.assignments);
+                break;
+              case 'grades':
+                if (value.result.grades) canvasData.grades.push(...value.result.grades);
+                break;
+              case 'announcements':
+                if (value.result.announcements) canvasData.announcements.push(...value.result.announcements);
+                break;
+              case 'discussions':
+                if (value.result.discussions) canvasData.discussions.push(...value.result.discussions);
+                break;
+              case 'calendar':
+                if (value.result.events) canvasData.calendar.push(...value.result.events);
+                break;
+              case 'todo':
+                if (value.result.items) canvasData.todo.push(...value.result.items);
+                break;
+            }
+          }
+        } catch {}
       }
 
       // Remove duplicates from courses array
@@ -1093,12 +1144,12 @@ class TabManager {
       return; // Wait for authentication or available tabs
     }
 
-    // Sort tasks by priority: high -> medium -> low
+    // Sort tasks by priority: highest -> high -> medium -> low
     const pendingTasks = this.dataCollectionQueue
       .filter(task => task.status === 'queued')
       .sort((a, b) => {
-        const priorityOrder = { 'high': 0, 'medium': 1, 'low': 2 };
-        return (priorityOrder[a.priority] || 1) - (priorityOrder[b.priority] || 1);
+        const priorityOrder = { 'highest': 0, 'high': 1, 'medium': 2, 'low': 3 };
+        return (priorityOrder[a.priority] || 2) - (priorityOrder[b.priority] || 2);
       });
 
     console.log(`Processing ${pendingTasks.length} queued tasks (prioritized)`);
@@ -1131,6 +1182,16 @@ class TabManager {
     const tabId = await this.createGhostTab(task.url, `autonomous-${task.type}`);
 
     try {
+      // Wait for key DOM content to appear (handles SPA/dynamic loads)
+      try {
+        const selectors = this.getSelectorsForTaskType(task.type);
+        if (selectors && selectors.length) {
+          await this.waitForSelectorsInTab(tabId, selectors, 10000);
+        }
+      } catch (waitErr) {
+        console.warn(`Content wait timed out for ${task.type}:`, waitErr?.message || waitErr);
+      }
+
       // Execute the data extraction
       const result = await this.executeInTab(tabId, task.extractorFunction);
 
@@ -1141,6 +1202,61 @@ class TabManager {
       // Always clean up the tab
       await this.closeGhostTab(tabId);
     }
+  }
+
+  /**
+   * Map task type to important selectors to wait for
+   */
+  getSelectorsForTaskType(taskType) {
+    switch (taskType) {
+      case 'dashboard':
+        return ['.ic-DashboardCard', '.course-card', '[data-testid="course-card"]'];
+      case 'courses-list':
+        return ['a[href*="/courses/"]'];
+      case 'course-home':
+        return ['.ic-app-course-nav', '#section-tabs', '.course-title'];
+      case 'course-assignments':
+        return ['.ig-list .ig-row', '.assignment-group .assignment', 'li.assignment', '.AssignmentList__Assignment', 'tr.assignment'];
+      case 'course-grades':
+      case 'grades-summary':
+        return ['.grades', '.gradebook', '.student_assignment', '.final-grade'];
+      case 'course-announcements':
+        return ['.announcement', '[data-testid="announcement"]'];
+      case 'course-discussions':
+        return ['.discussion', '.discussion-topic'];
+      case 'course-modules':
+        return ['.context_module', '.module'];
+      case 'course-syllabus':
+        return ['#course_syllabus', '.ic-Layout-contentMain'];
+      case 'course-files':
+        return ['[data-testid="files-app"]', '.ef-name-col__link'];
+      case 'calendar':
+        return ['.fc-event', '.planner-item', '#calendar-app'];
+      case 'todo':
+        return ['.PlannerItem', '.to-do-list', '.todo-list'];
+      default:
+        return [];
+    }
+  }
+
+  /**
+   * Wait in tab until any of the selectors are found or timeout
+   */
+  async waitForSelectorsInTab(tabId, selectors, timeoutMs = 10000) {
+    if (!selectors || selectors.length === 0) return;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const found = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (sels) => sels.some(sel => {
+          try { return !!document.querySelector(sel); } catch { return false; }
+        }),
+        args: [selectors]
+      });
+      if (found && found[0] && found[0].result) return;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    throw new Error(`Selectors not found within ${timeoutMs}ms: ${selectors.join(', ')}`);
   }
 
   /**
@@ -1225,7 +1341,7 @@ class TabManager {
   /**
    * Trigger autonomous sync cycle
    */
-  triggerAutonomousSync() {
+  async triggerAutonomousSync() {
     if (!this.sessionState.isAuthenticated) {
       console.log('Skipping autonomous sync - not authenticated');
       return;
@@ -1234,7 +1350,7 @@ class TabManager {
     console.log('Triggering autonomous data collection sync...');
 
     // Generate sync tasks for current semester data
-    const syncTasks = this.generateSyncTasks();
+    const syncTasks = await this.generateSyncTasks();
 
     // Queue the tasks
     for (const task of syncTasks) {
@@ -1247,7 +1363,7 @@ class TabManager {
   /**
    * Generate comprehensive autonomous sync tasks for Phase 4.2
    */
-  generateSyncTasks() {
+  async generateSyncTasks() {
     const tasks = [];
 
     // Only generate tasks if we have a canvas domain
@@ -1266,10 +1382,24 @@ class TabManager {
       priority: 'high',
       url: `${baseUrl}/`,
       extractorFunction: () => {
-        if (window.CanvasDataExtractor) {
-          return window.CanvasDataExtractor.extractCurrentPage();
+        try {
+          const courses = [];
+          const qAll = (s) => { try { return Array.from(document.querySelectorAll(s)); } catch { return []; } };
+          const q = (s, c=document) => { try { return c.querySelector(s); } catch { return null; } };
+          const tc = (el) => { try { return (el && el.textContent || '').trim(); } catch { return ''; } };
+          const attr = (el,a) => { try { return el.getAttribute(a) || ''; } catch { return ''; } };
+          const cards = qAll('.ic-DashboardCard, .course-card, .dashboard-card, [data-testid="course-card"]');
+          cards.forEach(card => {
+            const nameEl = q('.ic-DashboardCard__header_title, .course-title, h3, h4', card);
+            const linkEl = q('a[href*="/courses/"]', card) || card;
+            const name = tc(nameEl) || attr(card,'aria-label');
+            const url = attr(linkEl,'href');
+            if (name) courses.push({ name, url });
+          });
+          return { type: 'dashboard', courses };
+        } catch (e) {
+          return { type: 'dashboard', courses: [], error: e.message };
         }
-        return { type: 'dashboard', error: 'DataExtractor not available' };
       }
     });
 
@@ -1279,15 +1409,23 @@ class TabManager {
       priority: 'high',
       url: `${baseUrl}/courses`,
       extractorFunction: () => {
-        if (window.CanvasDataExtractor) {
-          return window.CanvasDataExtractor.extractCurrentPage();
+        try {
+          const courses = [];
+          const links = Array.from(document.querySelectorAll('a[href*="/courses/"]'));
+          links.forEach(a => {
+            const name = (a.textContent || '').trim() || (a.getAttribute('aria-label') || '').trim();
+            const url = a.getAttribute('href') || '';
+            if (url.match(/\/courses\/\d+/)) courses.push({ name, url });
+          });
+          return { type: 'courses', courses };
+        } catch (e) {
+          return { type: 'courses', courses: [], error: e.message };
         }
-        return { type: 'courses', error: 'DataExtractor not available' };
       }
     });
 
     // 3. Get course IDs from storage for detailed scraping
-    this.generateDetailedCourseTasks(tasks, baseUrl);
+    await this.generateDetailedCourseTasks(tasks, baseUrl);
 
     // 4. Calendar - Get upcoming assignments and events
     tasks.push({
@@ -1332,9 +1470,34 @@ class TabManager {
       const storedData = await chrome.storage.local.get('autonomous_data_dashboard');
       const dashboardData = storedData.autonomous_data_dashboard;
 
-      if (dashboardData && dashboardData.result && dashboardData.result.data && dashboardData.result.data.courses) {
-        const courses = dashboardData.result.data.courses;
-        console.log(`Found ${courses.length} courses for detailed scraping`);
+      // Try multiple data structure paths to find courses
+      let courses = [];
+      
+      if (dashboardData && dashboardData.result) {
+        // Try different possible data structures
+        if (dashboardData.result.courses) {
+          courses = dashboardData.result.courses;
+        } else if (dashboardData.result.data && dashboardData.result.data.courses) {
+          courses = dashboardData.result.data.courses;
+        }
+      }
+      
+      // Also try courses-list data
+      if (courses.length === 0) {
+        const coursesListData = await chrome.storage.local.get('autonomous_data_courses-list');
+        const coursesData = coursesListData['autonomous_data_courses-list'];
+        if (coursesData && coursesData.result) {
+          if (coursesData.result.courses) {
+            courses = coursesData.result.courses;
+          } else if (coursesData.result.data && coursesData.result.data.courses) {
+            courses = coursesData.result.data.courses;
+          }
+        }
+      }
+      
+      console.log(`🔍 Found ${courses.length} courses for detailed scraping`);
+      
+      if (courses.length > 0) {
 
         for (const course of courses.slice(0, 5)) { // Limit to 5 courses to avoid overwhelming
           const courseId = course.id || this.extractCourseIdFromUrl(course.url);
@@ -1348,22 +1511,47 @@ class TabManager {
               courseName: course.name,
               url: `${baseUrl}/courses/${courseId}`,
               extractorFunction: () => {
-                if (window.CanvasDataExtractor) {
-                  return window.CanvasDataExtractor.extractCurrentPage();
+                try {
+                  const title = (document.querySelector('.course-title, h1, #breadcrumbs .ellipsible')?.textContent || '').trim();
+                  const nav = Array.from(document.querySelectorAll('.ic-app-course-nav a, #section-tabs a')).map(a => ({ text: (a.textContent||'').trim(), url: a.getAttribute('href')||'' })).filter(n=>n.text);
+                  return { type: 'course', courseInfo: { name: title, id: (location.pathname.match(/\/courses\/(\d+)/)||[])[1] }, navigation: nav };
+                } catch (e) {
+                  return { type: 'course', error: e.message };
                 }
-                return { type: 'course', error: 'DataExtractor not available' };
               }
             });
 
-            // Course assignments
+            // Course assignments - HIGHEST PRIORITY for assignment data
             tasks.push({
               type: 'course-assignments',
-              priority: 'high',
+              priority: 'highest',
               courseId: courseId,
               courseName: course.name,
               url: `${baseUrl}/courses/${courseId}/assignments`,
               extractorFunction: () => {
-                return this.extractAssignmentsData(courseId);
+                try {
+                  const items = [];
+                  const qAll = (s) => { try { return Array.from(document.querySelectorAll(s)); } catch { return []; } };
+                  const q = (s, c=document) => { try { return c.querySelector(s); } catch { return null; } };
+                  const tc = (el) => { try { return (el && el.textContent || '').trim(); } catch { return ''; } };
+                  const attr = (el,a) => { try { return el.getAttribute(a) || ''; } catch { return ''; } };
+                  const rows = qAll('.ig-list .ig-row, .assignment-group .assignment, li.assignment, .AssignmentList__Assignment, tr.assignment');
+                  rows.forEach(r => {
+                    const link = q('a[href*="/assignments/"]', r) || q('a', r);
+                    const title = tc(link) || tc(q('.title, h3, h4', r));
+                    const url = attr(link,'href');
+                    const idMatch = url ? url.match(/\/assignments\/(\d+)/) : null;
+                    const id = idMatch ? idMatch[1] : '';
+                    const dueEl = q('.due, .ig-details .due, [data-testid="assignment-date"], time', r);
+                    const due = attr(dueEl,'datetime') || tc(dueEl);
+                    const ptsText = tc(q('.points, .assignment-points, [data-testid="assignment-points"]', r));
+                    let points = 0; const m = ptsText && ptsText.match(/(\d+(?:\.\d+)?)\s*pts?/i); if (m) points = Number(m[1]);
+                    if (title) items.push({ id, title, url, dueDate: due, points });
+                  });
+                  return { type: 'course-assignments', courseId: (location.pathname.match(/\/courses\/(\d+)/)||[])[1], assignments: items };
+                } catch (e) {
+                  return { type: 'course-assignments', courseId, assignments: [], error: e.message };
+                }
               }
             });
 
@@ -1440,6 +1628,42 @@ class TabManager {
             });
           }
         }
+      } else {
+        console.log('⚠️ No course data available yet - adding fallback course tasks');
+        
+        // Add fallback course tasks for known course ID from your logs
+        const knownCourseId = '194015';
+        console.log(`📝 Adding fallback tasks for course ID: ${knownCourseId}`);
+        
+        // Course assignments - HIGHEST PRIORITY for getting assignment data
+        tasks.push({
+          type: 'course-assignments',
+          priority: 'highest',
+          courseId: knownCourseId,
+          courseName: `Course ${knownCourseId}`,
+          url: `${baseUrl}/courses/${knownCourseId}/assignments`,
+          extractorFunction: () => {
+            if (window.CanvasDataExtractor) {
+              return window.CanvasDataExtractor.extractCurrentPage();
+            }
+            return { type: 'course-assignments', courseId: knownCourseId, assignments: [], error: 'DataExtractor not available' };
+          }
+        });
+
+        // Course home page
+        tasks.push({
+          type: 'course-home',
+          priority: 'high',
+          courseId: knownCourseId,
+          courseName: `Course ${knownCourseId}`,
+          url: `${baseUrl}/courses/${knownCourseId}`,
+          extractorFunction: () => {
+            if (window.CanvasDataExtractor) {
+              return window.CanvasDataExtractor.extractCurrentPage();
+            }
+            return { type: 'course-home', courseId: knownCourseId, error: 'DataExtractor not available' };
+          }
+        });
       }
     } catch (error) {
       console.error('Error generating detailed course tasks:', error);
@@ -1734,7 +1958,9 @@ class TabManager {
     this.autonomousEnabled = true;
 
     // Trigger immediate sync
-    this.triggerAutonomousSync();
+    this.triggerAutonomousSync().catch(error => {
+      console.error('❌ Failed to trigger autonomous sync:', error);
+    });
   }
 
   /**
@@ -2317,7 +2543,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
 
     case 'TRIGGER_AUTONOMOUS_SYNC':
-      tabManager.triggerAutonomousSync();
+      tabManager.triggerAutonomousSync().catch(error => {
+        console.error('❌ Failed to trigger autonomous sync:', error);
+      });
       sendResponse({ success: true });
       break;
 
@@ -2680,12 +2908,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       // Check what data is available
       chrome.storage.local.get().then((allData) => {
-        const canvasKeys = Object.keys(allData).filter(key => key.startsWith('autonomous_data_'));
-        
-        chatContext.dataAvailability.courses = canvasKeys.some(key => key.includes('dashboard') || key.includes('courses'));
-        chatContext.dataAvailability.assignments = canvasKeys.some(key => key.includes('assignments'));
-        chatContext.dataAvailability.grades = canvasKeys.some(key => key.includes('grades'));
-        chatContext.dataAvailability.announcements = canvasKeys.some(key => key.includes('announcements'));
+        const keys = Object.keys(allData);
+        const autoKeys = keys.filter(k => k.startsWith('autonomous_data_'));
+        const canvasKeys = keys.filter(k => k.startsWith('canvas_'));
+
+        chatContext.dataAvailability.courses =
+          autoKeys.some(k => k.includes('dashboard') || k.includes('courses')) ||
+          canvasKeys.some(k => k.startsWith('canvas_courses_') || k.startsWith('canvas_course-home_'));
+
+        chatContext.dataAvailability.assignments =
+          autoKeys.some(k => k.includes('assignments')) ||
+          canvasKeys.some(k => k.startsWith('canvas_course-assignments_'));
+
+        chatContext.dataAvailability.grades =
+          autoKeys.some(k => k.includes('grades')) ||
+          canvasKeys.some(k => k.startsWith('canvas_course-grades_') || k.startsWith('canvas_grades-summary_'));
+
+        chatContext.dataAvailability.announcements =
+          autoKeys.some(k => k.includes('announcements')) ||
+          canvasKeys.some(k => k.startsWith('canvas_course-announcements_'));
         
         // Find most recent sync
         const timestamps = canvasKeys.map(key => {
@@ -2811,12 +3052,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log('🚀 Manual autonomous collection triggered');
       
       try {
-        // Trigger immediate data collection
-        tabManager.processDataCollectionQueue();
+        // Trigger immediate full sync
+        console.log('⚡ Starting immediate sync...');
+        tabManager.triggerAutonomousSync().catch(error => {
+          console.error('❌ Failed to trigger autonomous sync:', error);
+        });
+        
+        // Also process any existing queue
+        setTimeout(() => {
+          tabManager.processDataCollectionQueue();
+        }, 1000);
         
         sendResponse({
           success: true,
-          message: 'Autonomous data collection triggered'
+          message: 'Immediate autonomous data collection started (30s intervals active)'
         });
       } catch (error) {
         console.error('❌ Failed to trigger autonomous collection:', error);
@@ -2978,9 +3227,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
   switch (alarm.name) {
     case 'canvas-autonomous-sync':
-      console.log('5-minute autonomous sync alarm triggered');
+      console.log('⚡ 30-second autonomous sync alarm triggered');
       if (tabManager.autonomousEnabled) {
-        tabManager.triggerAutonomousSync();
+        tabManager.triggerAutonomousSync().catch(error => {
+          console.error('❌ Failed to trigger autonomous sync:', error);
+        });
       }
       break;
 

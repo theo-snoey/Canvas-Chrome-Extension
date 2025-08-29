@@ -146,6 +146,9 @@ class CanvasDataExtractor {
         case 'dashboard':
           extractedData = this.extractDashboardData();
           break;
+        case 'assignments':
+          extractedData = this.extractAssignmentsData();
+          break;
         case 'course':
           extractedData = this.extractCourseData();
           break;
@@ -197,7 +200,8 @@ class CanvasDataExtractor {
       '.course-card', 
       '.dashboard-card',
       '[data-testid="course-card"]',
-      '.ic-DashboardCard'
+      '.ic-DashboardCard',
+      '.new-course-card-selector' // Add new selector if needed
     ];
 
     for (const selector of courseSelectors) {
@@ -235,7 +239,8 @@ class CanvasDataExtractor {
       '.announcement',
       '.dashboard-news',
       '[data-testid="announcement"]',
-      '.ic-DashboardCard__action-container'
+      '.ic-DashboardCard__action-container',
+      '.new-announcement-selector' // Add new selector if needed
     ];
 
     for (const selector of announcementSelectors) {
@@ -256,6 +261,122 @@ class CanvasDataExtractor {
     }
 
     console.log('Dashboard extraction completed:', data);
+    return data;
+  }
+
+  /**
+   * Extract assignments from the course assignments page
+   */
+  extractAssignmentsData() {
+    console.log('Extracting assignments data...');
+
+    const data = {
+      type: 'assignments',
+      courseId: null,
+      courseName: '',
+      items: []
+    };
+
+    // Course ID from URL
+    const idMatch = window.location.pathname.match(/\/courses\/(\d+)/);
+    if (idMatch) {
+      data.courseId = idMatch[1];
+    }
+
+    // Try to read course name from breadcrumbs/header
+    const courseNameSelectors = [
+      '#breadcrumbs .ellipsible',
+      '.ic-app-course-menu .ic-app-course-menu__header',
+      '.course-title',
+      'h1'
+    ];
+    for (const selector of courseNameSelectors) {
+      const el = this.safeQuery(selector);
+      if (el && this.safeTextContent(el)) {
+        data.courseName = this.safeTextContent(el);
+        break;
+      }
+    }
+
+    // Candidate selectors for assignment rows/items (Canvas varies by theme)
+    const rowSelectors = [
+      '.ig-list .ig-row',
+      '.assignment-group .assignment',
+      'li.assignment',
+      '.AssignmentList__Assignment',
+      'tr.assignment',
+      '.new-assignment-row-selector' // Add new selector if needed
+    ];
+
+    let rows = [];
+    for (const selector of rowSelectors) {
+      rows = this.safeQueryAll(selector);
+      if (rows.length > 0) {
+        console.log(`Found ${rows.length} assignment rows using selector: ${selector}`);
+        break;
+      }
+    }
+
+    // Helper to parse due date text to ISO
+    const parseDue = (text) => {
+      if (!text) return '';
+      try {
+        const d = new Date(text);
+        if (!isNaN(d.getTime())) return d.toISOString();
+      } catch {}
+      return String(text).trim();
+    };
+
+    // Extract fields from each row
+    data.items = rows.map((row) => {
+      // Title and URL
+      const link = this.safeQuery('a[href*="/assignments/"]', row) || this.safeQuery('a', row);
+      const title = this.safeTextContent(link) || this.safeTextContent(this.safeQuery('.title, h3, h4', row));
+      const url = this.safeAttribute(link, 'href');
+
+      // ID from URL
+      let id = '';
+      const idMatchLocal = url ? url.match(/\/assignments\/(\d+)/) : null;
+      if (idMatchLocal) id = idMatchLocal[1];
+
+      // Due date
+      const dueEl = this.safeQuery('.due, .ig-details .due, [data-testid="assignment-date"], time', row);
+      const dueText = this.safeTextContent(dueEl) || this.safeAttribute(dueEl, 'datetime');
+      const dueDate = parseDue(dueText);
+
+      // Points
+      const pointsEl = this.safeQuery('.points, .assignment-points, [data-testid="assignment-points"]', row);
+      let points = 0;
+      const ptsText = this.safeTextContent(pointsEl);
+      if (ptsText) {
+        const m = ptsText.match(/(\d+(?:\.\d+)?)\s*pts?/i);
+        if (m) points = Number(m[1]);
+      }
+
+      // Status
+      const statusEl = this.safeQuery('.status, .submission-status, [data-testid="submission-status"]', row);
+      const status = this.safeTextContent(statusEl);
+
+      // Group/Section name
+      let group = '';
+      const groupContainer = row.closest('.assignment-group') || row.closest('.ig-header') || null;
+      if (groupContainer) {
+        const gEl = this.safeQuery('.assignment-group-name, .ig-header-title, h3, h4', groupContainer);
+        group = this.safeTextContent(gEl);
+      }
+
+      return {
+        id,
+        title,
+        url,
+        dueDate,
+        points,
+        status,
+        group
+      };
+    }).filter(item => item.title);
+
+    console.log('Assignments extraction completed:', { count: data.items.length, courseId: data.courseId });
     return data;
   }
 

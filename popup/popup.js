@@ -585,3 +585,28 @@ function showNotification(message, type = 'info') {
     }, 300);
   }, 3000);
 }
+
+/**
+ * Open the standalone chat window
+ */
+async function openChatWindow() {
+  try {
+    showNotification('Opening Canvas Chat Assistant...', 'info');
+    
+    const response = await chrome.runtime.sendMessage({
+      action: 'OPEN_CHAT_WINDOW'
+    });
+    
+    if (response && response.success) {
+      showNotification('Chat window opened successfully!', 'success');
+      // Close the popup after opening chat
+      setTimeout(() => window.close(), 1000);
+    } else {
+      showNotification('Failed to open chat window', 'error');
+      console.error('Failed to open chat window:', response);
+    }
+  } catch (error) {
+    showNotification('Error opening chat window', 'error');
+    console.error('Error opening chat window:', error);
+  }
+}

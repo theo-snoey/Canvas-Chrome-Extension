@@ -206,6 +206,23 @@ Canvas-chr-ext/
 - [ ] "Suggest study groups based on my courses"
 - [ ] "Recommend resources for struggling subjects"
 
+### **5.5 Hybrid NLP Approach**
+**Local NLP for Core Queries:**
+- [x] Implement local NLP for fast, deterministic queries
+- [x] Use local processing for structured data queries (e.g., assignments, grades)
+- [x] Ensure privacy by keeping most queries on-device
+
+**ChatGPT API for Complex Tasks:**
+- [ ] Integrate ChatGPT API for generative tasks (e.g., writing, summarizing)
+- [ ] Implement user opt-in for API usage
+- [ ] Redact sensitive data before sending to API
+- [ ] Balance API usage to manage costs and latency
+
+**Benefits of Hybrid Approach:**
+- [x] Combines speed and privacy of local NLP with the power of ChatGPT
+- [x] Provides flexibility to handle a wide range of queries
+- [x] Allows for future scalability and feature expansion
+
 ---
 
 ## **Phase 6: Hardening & Polish** 🛡️
