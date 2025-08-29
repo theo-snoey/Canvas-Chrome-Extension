@@ -248,11 +248,28 @@ class CanvasChatInterface {
           content: response.reply,
           timestamp: new Date().toISOString(),
           conversationId: this.conversationId,
-          metadata: response.metadata || {}
+          metadata: response.metadata || {},
+          nlp: {
+            intent: response.metadata?.intent,
+            confidence: response.metadata?.confidence,
+            parameters: response.metadata?.parameters,
+            suggestions: response.metadata?.suggestions,
+            nlpEnabled: response.metadata?.nlpEnabled
+          }
         };
 
         this.messages.push(assistantMessage);
         this.displayMessage(assistantMessage);
+
+        // Show NLP insights if available (for development)
+        if (assistantMessage.nlp.nlpEnabled && assistantMessage.nlp.intent) {
+          console.log('🧠 NLP Insights:', {
+            intent: assistantMessage.nlp.intent,
+            confidence: `${(assistantMessage.nlp.confidence * 100).toFixed(1)}%`,
+            parameters: assistantMessage.nlp.parameters,
+            suggestions: assistantMessage.nlp.suggestions
+          });
+        }
 
         // Play notification sound
         if (this.settings.soundEnabled) {

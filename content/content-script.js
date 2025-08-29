@@ -420,14 +420,26 @@ async function initializeContentScript() {
  */
 async function sendPageInfoToBackground(pageInfo) {
   try {
+    // Check if extension context is still valid
+    if (!chrome.runtime?.id) {
+      console.warn('⚠️ Extension context invalidated, skipping page info send');
+      return;
+    }
+
     const response = await chrome.runtime.sendMessage({
       action: 'PAGE_DETECTED',
       data: pageInfo
     });
 
-    console.log('Page info sent to background:', response);
+    console.log('📤 Page info sent to background:', response);
   } catch (error) {
-    console.error('Error sending page info to background:', error);
+    if (error.message.includes('Extension context invalidated')) {
+      console.warn('⚠️ Extension context invalidated - this is normal after extension reload');
+    } else if (error.message.includes('Could not establish connection')) {
+      console.warn('⚠️ Could not connect to background script - extension may be reloading');
+    } else {
+      console.error('❌ Error sending page info to background:', error);
+    }
   }
 }
 

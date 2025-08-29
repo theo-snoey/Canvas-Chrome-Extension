@@ -12,6 +12,14 @@ try {
   console.error('❌ Failed to load Storage Manager:', error);
 }
 
+// Import NLP Processor for Phase 5.2
+try {
+  importScripts('nlp-processor.js');
+  console.log('🧠 NLP Processor loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load NLP Processor:', error);
+}
+
 // Debug: Log when the script is fully loaded
 console.log('🚀 Background worker initialization starting...');
 
@@ -64,6 +72,15 @@ class TabManager {
     } catch (error) {
       console.error('❌ Storage Manager initialization failed:', error);
       this.storageManager = null;
+    }
+
+    // Initialize NLP Processor for Phase 5.2
+    try {
+      this.nlpProcessor = new CanvasNLPProcessor();
+      console.log('🧠 Natural Language Processor initialized');
+    } catch (error) {
+      console.error('❌ NLP Processor initialization failed:', error);
+      this.nlpProcessor = null;
     }
 
     // Start cleanup process
@@ -901,6 +918,128 @@ class TabManager {
       console.log('💾 Saved user domain configuration:', this.sessionState.userDomains);
     } catch (error) {
       console.error('Failed to save user domain configuration:', error);
+    }
+  }
+
+  /**
+   * Get Canvas data for NLP processing (Phase 5.2)
+   */
+  async getCanvasDataForNLP() {
+    try {
+      console.log('📊 Gathering Canvas data for NLP processing...');
+      
+      // Get all autonomous data
+      const allData = await chrome.storage.local.get();
+      const canvasData = {
+        courses: [],
+        assignments: [],
+        grades: [],
+        announcements: [],
+        discussions: [],
+        calendar: [],
+        todo: [],
+        lastUpdated: null,
+        dataQuality: 0
+      };
+
+      // Process autonomous data
+      for (const [key, value] of Object.entries(allData)) {
+        if (key.startsWith('autonomous_data_')) {
+          const dataType = key.split('_')[2]; // Extract type from key
+          
+          if (value && value.result) {
+            switch (dataType) {
+              case 'dashboard':
+                if (value.result.courses) {
+                  canvasData.courses.push(...value.result.courses);
+                }
+                break;
+              case 'courses':
+                if (value.result.courses) {
+                  canvasData.courses.push(...value.result.courses);
+                }
+                break;
+              case 'assignments':
+                if (value.result.assignments) {
+                  canvasData.assignments.push(...value.result.assignments);
+                }
+                break;
+              case 'grades':
+                if (value.result.grades) {
+                  canvasData.grades.push(...value.result.grades);
+                }
+                break;
+              case 'announcements':
+                if (value.result.announcements) {
+                  canvasData.announcements.push(...value.result.announcements);
+                }
+                break;
+              case 'discussions':
+                if (value.result.discussions) {
+                  canvasData.discussions.push(...value.result.discussions);
+                }
+                break;
+              case 'calendar':
+                if (value.result.events) {
+                  canvasData.calendar.push(...value.result.events);
+                }
+                break;
+              case 'todo':
+                if (value.result.items) {
+                  canvasData.todo.push(...value.result.items);
+                }
+                break;
+            }
+            
+            // Track most recent update
+            if (value.timestamp) {
+              const updateTime = new Date(value.timestamp).getTime();
+              if (!canvasData.lastUpdated || updateTime > new Date(canvasData.lastUpdated).getTime()) {
+                canvasData.lastUpdated = value.timestamp;
+              }
+            }
+            
+            // Aggregate data quality
+            if (value.dataQuality) {
+              canvasData.dataQuality = Math.max(canvasData.dataQuality, value.dataQuality);
+            }
+          }
+        }
+      }
+
+      // Remove duplicates from courses array
+      canvasData.courses = canvasData.courses.filter((course, index, self) => 
+        index === self.findIndex(c => c.id === course.id || c.name === course.name)
+      );
+
+      console.log(`📋 NLP Data Summary:`, {
+        courses: canvasData.courses.length,
+        assignments: canvasData.assignments.length,
+        grades: canvasData.grades.length,
+        announcements: canvasData.announcements.length,
+        discussions: canvasData.discussions.length,
+        calendar: canvasData.calendar.length,
+        todo: canvasData.todo.length,
+        lastUpdated: canvasData.lastUpdated,
+        dataQuality: canvasData.dataQuality
+      });
+
+      return canvasData;
+
+    } catch (error) {
+      console.error('❌ Failed to gather Canvas data for NLP:', error);
+      return {
+        courses: [],
+        assignments: [],
+        grades: [],
+        announcements: [],
+        discussions: [],
+        calendar: [],
+        todo: [],
+        lastUpdated: null,
+        dataQuality: 0,
+        error: error.message
+      };
     }
   }
 
@@ -2396,36 +2535,103 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'PROCESS_CHAT_MESSAGE':
       console.log('🤖 Processing chat message:', request.data?.message?.content);
       
-      // For now, return a simple response - this will be enhanced in Phase 5.2
       const userMessage = request.data?.message?.content || '';
-      let reply = '';
-
-      // Simple keyword-based responses for testing
-      if (userMessage.toLowerCase().includes('hello') || userMessage.toLowerCase().includes('hi')) {
-        reply = "Hello! I'm your Canvas Assistant. I can help you with questions about your coursework, grades, assignments, and more. What would you like to know?";
-      } else if (userMessage.toLowerCase().includes('assignment')) {
-        reply = "I can help you with assignment information! I have access to your Canvas data and can tell you about due dates, submission requirements, and grades. What specific assignment would you like to know about?";
-      } else if (userMessage.toLowerCase().includes('grade')) {
-        reply = "I can help you check your grades! I have access to your Canvas gradebook data. Would you like to see your current grades for a specific course or overall GPA?";
-      } else if (userMessage.toLowerCase().includes('course')) {
-        reply = "I can provide information about your courses! I have access to your course schedules, syllabi, announcements, and more. Which course would you like to know about?";
-      } else {
-        reply = `I understand you're asking about: "${userMessage}". I'm still learning to process complex queries, but I have access to all your Canvas data including courses, assignments, grades, announcements, and more. Could you be more specific about what you'd like to know?`;
-      }
-
-      // Simulate processing delay for realistic feel
-      setTimeout(() => {
-        sendResponse({
-          success: true,
-          reply: reply,
-          metadata: {
-            processedAt: new Date().toISOString(),
-            conversationId: request.data?.conversationId,
-            messageId: request.data?.message?.id,
-            processingTime: Math.floor(Math.random() * 1000) + 500 // 500-1500ms
+      const conversationId = request.data?.conversationId || 'unknown';
+      const messageId = request.data?.message?.id || 'unknown';
+      
+      // Enhanced NLP processing (Phase 5.2)
+      if (tabManager.nlpProcessor) {
+        // Get Canvas data for context
+        tabManager.getCanvasDataForNLP().then(async (canvasData) => {
+          try {
+            const startTime = Date.now();
+            
+            // Process with NLP engine
+            const nlpResult = await tabManager.nlpProcessor.processQuery(
+              userMessage, 
+              conversationId, 
+              canvasData
+            );
+            
+            const processingTime = Date.now() - startTime;
+            
+            sendResponse({
+              success: true,
+              reply: nlpResult.response,
+              metadata: {
+                processedAt: new Date().toISOString(),
+                conversationId: conversationId,
+                messageId: messageId,
+                processingTime: processingTime,
+                intent: nlpResult.intent,
+                confidence: nlpResult.confidence,
+                parameters: nlpResult.parameters,
+                suggestions: nlpResult.suggestions,
+                nlpEnabled: true
+              }
+            });
+            
+          } catch (error) {
+            console.error('❌ NLP processing failed:', error);
+            sendResponse({
+              success: true,
+              reply: "I'm having trouble processing your question right now. Could you please try rephrasing it?",
+              metadata: {
+                processedAt: new Date().toISOString(),
+                conversationId: conversationId,
+                messageId: messageId,
+                processingTime: Date.now() - Date.now(),
+                error: error.message,
+                nlpEnabled: false
+              }
+            });
           }
+        }).catch(error => {
+          console.error('❌ Failed to get Canvas data for NLP:', error);
+          sendResponse({
+            success: true,
+            reply: "I'm having trouble accessing your Canvas data right now. Please make sure you're logged into Canvas and try again.",
+            metadata: {
+              processedAt: new Date().toISOString(),
+              conversationId: conversationId,
+              messageId: messageId,
+              error: error.message,
+              nlpEnabled: false
+            }
+          });
         });
-      }, Math.floor(Math.random() * 1000) + 500);
+      } else {
+        // Fallback to simple keyword-based responses
+        let reply = '';
+        
+        if (userMessage.toLowerCase().includes('hello') || userMessage.toLowerCase().includes('hi')) {
+          reply = "Hello! I'm your Canvas Assistant. I can help you with questions about your coursework, grades, assignments, and more. What would you like to know?";
+        } else if (userMessage.toLowerCase().includes('assignment')) {
+          reply = "I can help you with assignment information! I have access to your Canvas data and can tell you about due dates, submission requirements, and grades. What specific assignment would you like to know about?";
+        } else if (userMessage.toLowerCase().includes('grade')) {
+          reply = "I can help you check your grades! I have access to your Canvas gradebook data. Would you like to see your current grades for a specific course or overall GPA?";
+        } else if (userMessage.toLowerCase().includes('course')) {
+          reply = "I can provide information about your courses! I have access to your course schedules, syllabi, announcements, and more. Which course would you like to know about?";
+        } else {
+          reply = `I understand you're asking about: "${userMessage}". I'm still learning to process complex queries, but I have access to all your Canvas data including courses, assignments, grades, announcements, and more. Could you be more specific about what you'd like to know?`;
+        }
+
+        // Simulate processing delay for realistic feel
+        setTimeout(() => {
+          sendResponse({
+            success: true,
+            reply: reply,
+            metadata: {
+              processedAt: new Date().toISOString(),
+              conversationId: conversationId,
+              messageId: messageId,
+              processingTime: Math.floor(Math.random() * 1000) + 500,
+              nlpEnabled: false,
+              fallback: true
+            }
+          });
+        }, Math.floor(Math.random() * 1000) + 500);
+      }
       
       return true; // Keep message channel open for async response
 
@@ -2600,6 +2806,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       tabManager.sessionState.lastAuthenticationLoss = null;
       sendResponse({ success: true });
       break;
+
+    case 'TRIGGER_AUTONOMOUS_COLLECTION':
+      console.log('🚀 Manual autonomous collection triggered');
+      
+      try {
+        // Trigger immediate data collection
+        tabManager.processDataCollectionQueue();
+        
+        sendResponse({
+          success: true,
+          message: 'Autonomous data collection triggered'
+        });
+      } catch (error) {
+        console.error('❌ Failed to trigger autonomous collection:', error);
+        sendResponse({
+          success: false,
+          error: error.message
+        });
+      }
+      return true;
+
+    case 'TEST_STORAGE_VALIDATION':
+      console.log('🧪 Testing storage validation for:', request.dataType);
+      
+      try {
+        if (tabManager.storageManager) {
+          const validatedData = tabManager.storageManager.validateData(request.dataType, request.data);
+          sendResponse({
+            success: true,
+            validatedData: validatedData
+          });
+        } else {
+          sendResponse({
+            success: false,
+            error: 'Storage manager not available'
+          });
+        }
+      } catch (error) {
+        console.error('❌ Storage validation test failed:', error);
+        sendResponse({
+          success: false,
+          error: error.message
+        });
+      }
+      return true;
 
     default:
       sendResponse({ error: 'Unknown action' });

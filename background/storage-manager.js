@@ -85,6 +85,94 @@ class CanvasStorageManager {
         isLocked: 'boolean',
         isPinned: 'boolean'
       },
+      todo: {
+        id: 'string',
+        courseId: 'string',
+        title: 'string',
+        type: 'string', // assignment, quiz, discussion, etc.
+        dueDate: 'date',
+        courseName: 'string',
+        url: 'string',
+        isCompleted: 'boolean',
+        priority: 'string',
+        points: 'number'
+      },
+      calendar: {
+        id: 'string',
+        title: 'string',
+        type: 'string', // assignment, event, etc.
+        startDate: 'date',
+        endDate: 'date',
+        courseId: 'string',
+        courseName: 'string',
+        description: 'string',
+        url: 'string',
+        allDay: 'boolean'
+      },
+      'grades-summary': {
+        courseId: 'string',
+        courseName: 'string',
+        currentGrade: 'string',
+        currentScore: 'number',
+        totalPoints: 'number',
+        earnedPoints: 'number',
+        gradingPeriod: 'string',
+        lastUpdated: 'timestamp'
+      },
+      'course-home': {
+        courseId: 'string',
+        courseName: 'string',
+        announcements: 'array',
+        recentActivity: 'array',
+        upcomingEvents: 'array',
+        extractedAt: 'timestamp'
+      },
+      'course-assignments': {
+        courseId: 'string',
+        assignments: 'array',
+        extractedAt: 'timestamp'
+      },
+      'course-grades': {
+        courseId: 'string',
+        grades: 'array',
+        overallGrade: 'object',
+        extractedAt: 'timestamp'
+      },
+      'course-announcements': {
+        courseId: 'string',
+        announcements: 'array',
+        extractedAt: 'timestamp'
+      },
+      'course-discussions': {
+        courseId: 'string',
+        discussions: 'array',
+        extractedAt: 'timestamp'
+      },
+      'course-modules': {
+        courseId: 'string',
+        modules: 'array',
+        extractedAt: 'timestamp'
+      },
+      'course-syllabus': {
+        courseId: 'string',
+        syllabus: 'string',
+        extractedAt: 'timestamp'
+      },
+      'course-files': {
+        courseId: 'string',
+        files: 'array',
+        extractedAt: 'timestamp'
+      },
+      dashboard: {
+        courses: 'array',
+        recentActivity: 'array',
+        upcomingEvents: 'array',
+        extractedAt: 'timestamp'
+      },
+      'courses-list': {
+        courses: 'array',
+        extractedAt: 'timestamp'
+      },
       module: {
         id: 'string',
         courseId: 'string',
@@ -184,6 +272,7 @@ class CanvasStorageManager {
   async storeData(dataType, data, options = {}) {
     const startTime = Date.now();
     console.log(`💾 Storing ${dataType} data...`);
+    console.log(`🔍 Raw data structure for ${dataType}:`, JSON.stringify(data, null, 2));
 
     try {
       // Validate data against schema
@@ -439,13 +528,51 @@ class CanvasStorageManager {
       return data;
     }
 
-    // Basic validation (can be enhanced with more sophisticated validation)
-    const validated = { ...data };
+    // Handle null or undefined data
+    if (data === null || data === undefined) {
+      console.warn(`⚠️ Null/undefined data for ${dataType}, using empty object`);
+      return {};
+    }
+
+    // Handle arrays - validate each item
+    if (Array.isArray(data)) {
+      console.log(`📋 Validating array of ${data.length} items for ${dataType}`);
+      return data.map((item, index) => {
+        try {
+          return this.validateSingleItem(item, schema, `${dataType}[${index}]`);
+        } catch (error) {
+          console.warn(`⚠️ Failed to validate item ${index} in ${dataType}:`, error);
+          return item; // Keep original if validation fails
+        }
+      });
+    }
+
+    // Handle single object
+    if (typeof data === 'object') {
+      return this.validateSingleItem(data, schema, dataType);
+    }
+
+    console.warn(`⚠️ Unexpected data type for ${dataType}:`, typeof data);
+    return data;
+  }
+
+  validateSingleItem(item, schema, itemName) {
+    if (!item || typeof item !== 'object') {
+      console.warn(`⚠️ Invalid item for ${itemName}, using empty object`);
+      return {};
+    }
+
+    const validated = { ...item };
     
-    // Ensure required fields exist and have correct types
+    // Validate each field according to schema
     for (const [field, type] of Object.entries(schema)) {
-      if (data[field] !== undefined) {
-        validated[field] = this.validateField(data[field], type);
+      if (item[field] !== undefined && item[field] !== null) {
+        try {
+          validated[field] = this.validateField(item[field], type);
+        } catch (error) {
+          console.warn(`⚠️ Failed to validate field ${field} for ${itemName}:`, error);
+          validated[field] = item[field]; // Keep original value
+        }
       }
     }
 
@@ -453,21 +580,51 @@ class CanvasStorageManager {
   }
 
   validateField(value, expectedType) {
+    // Handle null/undefined values
+    if (value === null || value === undefined) {
+      switch (expectedType) {
+        case 'string':
+          return '';
+        case 'number':
+          return 0;
+        case 'boolean':
+          return false;
+        case 'array':
+          return [];
+        case 'object':
+          return {};
+        case 'date':
+          return new Date();
+        case 'timestamp':
+          return new Date().toISOString();
+        default:
+          return null;
+      }
+    }
+
     switch (expectedType) {
       case 'string':
         return String(value);
       case 'number':
-        return Number(value) || 0;
+        const num = Number(value);
+        return isNaN(num) ? 0 : num;
       case 'boolean':
         return Boolean(value);
       case 'date':
-        return value instanceof Date ? value : new Date(value);
+        try {
+          const date = value instanceof Date ? value : new Date(value);
+          return isNaN(date.getTime()) ? new Date() : date;
+        } catch {
+          return new Date();
+        }
       case 'timestamp':
-        return typeof value === 'string' ? value : new Date().toISOString();
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number') return new Date(value).toISOString();
+        return new Date().toISOString();
       case 'array':
         return Array.isArray(value) ? value : [];
       case 'object':
-        return typeof value === 'object' ? value : {};
+        return typeof value === 'object' && value !== null ? value : {};
       default:
         return value;
     }
