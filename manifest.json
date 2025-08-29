@@ -43,5 +43,12 @@
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Canvas Assistant"
-  }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["chat/chat.html", "chat/chat.css", "chat/chat.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

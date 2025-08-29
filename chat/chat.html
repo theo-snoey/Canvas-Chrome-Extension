@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Assistant Chat</title>
+  <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+  <div class="chat-container">
+    <!-- Header -->
+    <div class="chat-header">
+      <div class="chat-title">
+        <div class="chat-icon">🎓</div>
+        <div class="title-text">
+          <h1>Canvas Assistant</h1>
+          <div class="status-indicator">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="status-text" id="statusText">Connecting...</span>
+          </div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="action-btn" id="clearChatBtn" title="Clear Chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
+          </svg>
+        </button>
+        <button class="action-btn" id="exportChatBtn" title="Export Chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+        </button>
+        <button class="action-btn" id="settingsBtn" title="Settings">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Chat Messages Area -->
+    <div class="chat-messages" id="chatMessages">
+      <div class="welcome-message">
+        <div class="welcome-icon">👋</div>
+        <h2>Welcome to Canvas Assistant!</h2>
+        <p>I can help you with questions about your coursework, grades, assignments, and more.</p>
+        <div class="quick-actions">
+          <button class="quick-action-btn" data-query="What assignments are due this week?">
+            📋 Upcoming Assignments
+          </button>
+          <button class="quick-action-btn" data-query="What's my current GPA?">
+            📊 Current Grades
+          </button>
+          <button class="quick-action-btn" data-query="Show me my course schedule">
+            📅 Course Schedule
+          </button>
+          <button class="quick-action-btn" data-query="What announcements do I have?">
+            📢 Recent Announcements
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Typing Indicator -->
+    <div class="typing-indicator" id="typingIndicator" style="display: none;">
+      <div class="typing-dots">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <span class="typing-text">Canvas Assistant is thinking...</span>
+    </div>
+
+    <!-- Chat Input -->
+    <div class="chat-input-container">
+      <div class="chat-input-wrapper">
+        <textarea 
+          id="chatInput" 
+          placeholder="Ask me about your coursework, grades, assignments..." 
+          rows="1"
+          maxlength="2000"
+        ></textarea>
+        <div class="input-actions">
+          <button class="input-action-btn" id="attachBtn" title="Attach File" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.64 16.2a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+          <button class="send-btn" id="sendBtn" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="input-footer">
+        <div class="character-count">
+          <span id="charCount">0</span> / 2000
+        </div>
+        <div class="input-hint">
+          Press <kbd>Enter</kbd> to send, <kbd>Shift + Enter</kbd> for new line
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Conversation Threading Panel (Hidden by default) -->
+  <div class="thread-panel" id="threadPanel" style="display: none;">
+    <div class="thread-header">
+      <h3>Conversation Threads</h3>
+      <button class="close-thread-btn" id="closeThreadBtn">×</button>
+    </div>
+    <div class="thread-list" id="threadList">
+      <!-- Threads will be populated here -->
+    </div>
+  </div>
+
+  <!-- Settings Panel (Hidden by default) -->
+  <div class="settings-panel" id="settingsPanel">
+    <div class="settings-header">
+      <h3>Chat Settings</h3>
+      <button class="close-settings-btn" id="closeSettingsBtn">×</button>
+    </div>
+    <div class="settings-content">
+      <div class="setting-group">
+        <label for="themeSelect">Theme</label>
+        <select id="themeSelect">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+      <div class="setting-group">
+        <label for="responseSpeed">Response Speed</label>
+        <select id="responseSpeed">
+          <option value="fast">Fast</option>
+          <option value="balanced">Balanced</option>
+          <option value="detailed">Detailed</option>
+        </select>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="soundEnabled" checked>
+          Enable notification sounds
+        </label>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="typingIndicator" checked>
+          Show typing indicator
+        </label>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="autoScroll" checked>
+          Auto-scroll to new messages
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context Menu (Hidden by default) -->
+  <div class="context-menu" id="contextMenu" style="display: none;">
+    <div class="context-menu-item" data-action="copy">Copy Message</div>
+    <div class="context-menu-item" data-action="edit">Edit Message</div>
+    <div class="context-menu-item" data-action="delete">Delete Message</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="thread">Start Thread</div>
+    <div class="context-menu-item" data-action="bookmark">Bookmark</div>
+  </div>
+
+  <script src="chat.js"></script>
+</body>
+</html>

@@ -10,6 +10,7 @@ function initializePopup() {
   const sendButton = document.getElementById('sendButton');
   const statusDiv = document.getElementById('status');
   const chatContainer = document.getElementById('chatContainer');
+  const openChatBtn = document.getElementById('openChatBtn');
 
   // Set up event listeners
   sendButton.addEventListener('click', handleSendMessage);
@@ -18,6 +19,11 @@ function initializePopup() {
       handleSendMessage();
     }
   });
+
+  // Add chat window button listener
+  if (openChatBtn) {
+    openChatBtn.addEventListener('click', openChatWindow);
+  }
 
   // Add refresh data button event listener
   const refreshDataButton = document.getElementById('refreshDataButton');
@@ -530,4 +536,52 @@ async function testCanvasSimulation() {
       }
     });
   });
+}
+
+// ============ PHASE 5.1: CHAT INTERFACE FUNCTIONS ============
+
+// Open chat window function
+function openChatWindow() {
+  console.log('💬 Opening chat window...');
+  
+  // Send message to background to open chat window
+  chrome.runtime.sendMessage({ action: 'OPEN_CHAT_WINDOW' }, (response) => {
+    if (response && response.success) {
+      console.log('✅ Chat window opened successfully:', response.windowId);
+      // Close popup after opening chat
+      window.close();
+    } else {
+      console.error('❌ Failed to open chat window:', response?.error);
+      // Show error feedback to user
+      showNotification('Failed to open chat window. Please try again.', 'error');
+    }
+  });
+}
+
+// Show notification function
+function showNotification(message, type = 'info') {
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.textContent = message;
+  notification.style.cssText = `
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: ${type === 'error' ? '#ef4444' : '#10b981'};
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    z-index: 1000;
+    animation: slideInRight 0.3s ease-out;
+  `;
+
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.style.animation = 'slideOutRight 0.3s ease-out forwards';
+    setTimeout(() => {
+      notification.remove();
+    }, 300);
+  }, 3000);
 }

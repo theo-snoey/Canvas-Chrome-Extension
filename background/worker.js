@@ -3,6 +3,15 @@
 
 console.log('Canvas Assistant background service worker loaded');
 
+// Import Storage Manager for Phase 4.4
+// Note: Using importScripts for service worker compatibility
+try {
+  importScripts('storage-manager.js');
+  console.log('📦 Storage Manager loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Storage Manager:', error);
+}
+
 // Debug: Log when the script is fully loaded
 console.log('🚀 Background worker initialization starting...');
 
@@ -47,6 +56,15 @@ class TabManager {
       userDomains: [] // User-configured domains
     };
     this.autonomousEnabled = false;
+
+    // Initialize Storage Manager for Phase 4.4
+    try {
+      this.storageManager = new CanvasStorageManager();
+      console.log('🗄️ Advanced Storage Manager initialized');
+    } catch (error) {
+      console.error('❌ Storage Manager initialization failed:', error);
+      this.storageManager = null;
+    }
 
     // Start cleanup process
     this.startCleanupProcess();
@@ -1317,6 +1335,27 @@ class TabManager {
       // Check if this is actually new/changed data
       const isNewData = this.isDataChanged(previousData?.result, result);
       
+      // Use advanced storage manager if available (Phase 4.4)
+      if (this.storageManager) {
+        try {
+          const storeResult = await this.storageManager.storeData(task.type, result, {
+            id: task.courseId || 'default',
+            version: (previousData?.version || 0) + 1,
+            quality: dataQuality,
+            source: 'autonomous',
+            courseId: task.courseId,
+            courseName: task.courseName,
+            priority: task.priority
+          });
+
+          if (storeResult.success) {
+            console.log(`🗄️ Advanced storage: ${task.type} (${storeResult.size} bytes, compressed: ${storeResult.compressed})`);
+          }
+        } catch (error) {
+          console.warn('⚠️ Advanced storage failed, using fallback:', error.message);
+        }
+      }
+      
       const storageData = {
         [fullKey]: {
           result,
@@ -2273,6 +2312,190 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }).catch(error => {
         sendResponse({ success: false, error: error.message });
       });
+      return true;
+
+    // ============ PHASE 4.4: ADVANCED STORAGE & CACHING ============
+
+    case 'GET_STORAGE_STATS':
+      if (tabManager.storageManager) {
+        tabManager.storageManager.getStorageStats().then(stats => {
+          sendResponse({ success: true, stats });
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Storage Manager not available' });
+      }
+      return true;
+
+    case 'QUERY_DATA':
+      if (tabManager.storageManager) {
+        tabManager.storageManager.queryData(request.query).then(result => {
+          sendResponse(result);
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Storage Manager not available' });
+      }
+      return true;
+
+    case 'GET_ADVANCED_DATA':
+      if (tabManager.storageManager) {
+        const { dataType, id, options } = request.data || {};
+        tabManager.storageManager.getData(dataType, id, options).then(result => {
+          sendResponse(result);
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Storage Manager not available' });
+      }
+      return true;
+
+    case 'CLEANUP_STORAGE':
+      if (tabManager.storageManager) {
+        const maxAge = request.data?.maxAge || (30 * 24 * 60 * 60 * 1000); // 30 days default
+        tabManager.storageManager.cleanupOldData(maxAge).then(result => {
+          sendResponse({ success: true, result });
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Storage Manager not available' });
+      }
+      return true;
+
+    case 'COMPRESS_DATA':
+      if (tabManager.storageManager) {
+        tabManager.storageManager.compressData(request.data).then(compressed => {
+          sendResponse({ success: true, compressed });
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Storage Manager not available' });
+      }
+      return true;
+
+    // ============ PHASE 5.1: UNIVERSAL CHAT INTERFACE ============
+
+    case 'CHAT_INTERFACE_READY':
+      console.log('💬 Chat interface connected:', request.data?.conversationId);
+      sendResponse({ 
+        success: true, 
+        message: 'Chat interface connected successfully',
+        canvasStatus: {
+          isAuthenticated: tabManager.sessionState.isAuthenticated,
+          domain: tabManager.sessionState.canvasDomain,
+          dataAvailable: true // TODO: Check actual data availability
+        }
+      });
+      return true;
+
+    case 'PROCESS_CHAT_MESSAGE':
+      console.log('🤖 Processing chat message:', request.data?.message?.content);
+      
+      // For now, return a simple response - this will be enhanced in Phase 5.2
+      const userMessage = request.data?.message?.content || '';
+      let reply = '';
+
+      // Simple keyword-based responses for testing
+      if (userMessage.toLowerCase().includes('hello') || userMessage.toLowerCase().includes('hi')) {
+        reply = "Hello! I'm your Canvas Assistant. I can help you with questions about your coursework, grades, assignments, and more. What would you like to know?";
+      } else if (userMessage.toLowerCase().includes('assignment')) {
+        reply = "I can help you with assignment information! I have access to your Canvas data and can tell you about due dates, submission requirements, and grades. What specific assignment would you like to know about?";
+      } else if (userMessage.toLowerCase().includes('grade')) {
+        reply = "I can help you check your grades! I have access to your Canvas gradebook data. Would you like to see your current grades for a specific course or overall GPA?";
+      } else if (userMessage.toLowerCase().includes('course')) {
+        reply = "I can provide information about your courses! I have access to your course schedules, syllabi, announcements, and more. Which course would you like to know about?";
+      } else {
+        reply = `I understand you're asking about: "${userMessage}". I'm still learning to process complex queries, but I have access to all your Canvas data including courses, assignments, grades, announcements, and more. Could you be more specific about what you'd like to know?`;
+      }
+
+      // Simulate processing delay for realistic feel
+      setTimeout(() => {
+        sendResponse({
+          success: true,
+          reply: reply,
+          metadata: {
+            processedAt: new Date().toISOString(),
+            conversationId: request.data?.conversationId,
+            messageId: request.data?.message?.id,
+            processingTime: Math.floor(Math.random() * 1000) + 500 // 500-1500ms
+          }
+        });
+      }, Math.floor(Math.random() * 1000) + 500);
+      
+      return true; // Keep message channel open for async response
+
+    case 'OPEN_CHAT_WINDOW':
+      console.log('🪟 Opening standalone chat window');
+      
+      chrome.windows.create({
+        url: chrome.runtime.getURL('chat/chat.html'),
+        type: 'popup',
+        width: 800,
+        height: 600,
+        focused: true
+      }).then((window) => {
+        sendResponse({ 
+          success: true, 
+          windowId: window.id,
+          message: 'Chat window opened successfully'
+        });
+      }).catch((error) => {
+        sendResponse({ 
+          success: false, 
+          error: error.message 
+        });
+      });
+      
+      return true;
+
+    case 'GET_CHAT_CONTEXT':
+      console.log('📋 Getting chat context data');
+      
+      // Gather relevant Canvas data for chat context
+      const chatContext = {
+        authentication: {
+          isAuthenticated: tabManager.sessionState.isAuthenticated,
+          domain: tabManager.sessionState.canvasDomain
+        },
+        dataAvailability: {
+          courses: false,
+          assignments: false,
+          grades: false,
+          announcements: false
+        },
+        lastSync: null,
+        dataQuality: 0
+      };
+
+      // Check what data is available
+      chrome.storage.local.get().then((allData) => {
+        const canvasKeys = Object.keys(allData).filter(key => key.startsWith('autonomous_data_'));
+        
+        chatContext.dataAvailability.courses = canvasKeys.some(key => key.includes('dashboard') || key.includes('courses'));
+        chatContext.dataAvailability.assignments = canvasKeys.some(key => key.includes('assignments'));
+        chatContext.dataAvailability.grades = canvasKeys.some(key => key.includes('grades'));
+        chatContext.dataAvailability.announcements = canvasKeys.some(key => key.includes('announcements'));
+        
+        // Find most recent sync
+        const timestamps = canvasKeys.map(key => {
+          const data = allData[key];
+          return data?.timestamp ? new Date(data.timestamp).getTime() : 0;
+        });
+        
+        if (timestamps.length > 0) {
+          chatContext.lastSync = new Date(Math.max(...timestamps)).toISOString();
+        }
+
+        sendResponse({ success: true, context: chatContext });
+      }).catch((error) => {
+        sendResponse({ success: false, error: error.message });
+      });
+      
       return true;
 
     // ============ PHASE 4.3: AUTHENTICATION MANAGEMENT ============

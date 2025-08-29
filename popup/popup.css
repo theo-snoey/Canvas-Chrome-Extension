@@ -319,3 +319,37 @@ body {
 .dev-toggle:hover {
   opacity: 1;
 }
+
+/* Action Buttons */
+.action-buttons {
+  margin: 1rem 0;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.primary-btn {
+  flex: 1;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: white;
+  border: none;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.primary-btn:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+
+.primary-btn:active {
+  transform: translateY(0);
+}
