@@ -162,13 +162,23 @@ class TabManager {
     console.log(`Executing extractor in tab: ${tabId}`);
 
     try {
-      // PHASE 1.2: Inject enhanced data extractor into ghost tabs
+      // PHASE 1.2: Inject enhanced data extractor into ghost tabs (avoid double injection)
       try {
-        await chrome.scripting.executeScript({
+        // Check if already injected to avoid "already declared" errors
+        const checkResult = await chrome.scripting.executeScript({
           target: { tabId: tabId },
-          files: ['content/data-extractor.js']
+          function: () => typeof CanvasDataExtractor !== 'undefined'
         });
-        console.log(`📦 Enhanced data extractor injected into tab: ${tabId}`);
+        
+        if (!checkResult[0].result) {
+          await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ['content/data-extractor.js']
+          });
+          console.log(`📦 Enhanced data extractor injected into tab: ${tabId}`);
+        } else {
+          console.log(`📦 Enhanced data extractor already available in tab: ${tabId}`);
+        }
       } catch (injectionError) {
         console.warn(`⚠️ Failed to inject enhanced extractor into tab ${tabId}:`, injectionError.message);
       }
@@ -3859,6 +3869,48 @@ chrome.runtime.onInstalled.addListener((details) => {
       tabManager.setupAutonomousAlarms();
     }
   }
+});
+
+/**
+ * PHASE 2.2: Handle extension icon click to open chat window automatically
+ */
+chrome.action.onClicked.addListener((tab) => {
+  console.log('🖱️ Extension icon clicked - opening chat window automatically');
+  
+  // Open the chat window directly (same logic as OPEN_CHAT_WINDOW message)
+  // Get current window to calculate sizing to match your preferred dimensions
+  chrome.windows.getCurrent().then((currentWindow) => {
+    const width = Math.floor((currentWindow.width || 1200) * 0.65); // 65% of screen width (rectangular shape)
+    const height = Math.floor((currentWindow.height || 800) * 0.8); // 80% of screen height (nice tall window)
+    const left = Math.floor(((currentWindow.width || 1200) - width) / 2); // Center horizontally
+    const top = Math.floor(((currentWindow.height || 800) - height) / 2); // Center vertically
+    
+    chrome.windows.create({
+      url: chrome.runtime.getURL('chat/chat.html'),
+      type: 'popup',
+      width: width,
+      height: height,
+      focused: true,
+      left: left,
+      top: top
+    }).then((window) => {
+      console.log(`✅ Chat window opened automatically (ID: ${window.id})`);
+      console.log(`📐 Window size: ${window.width}x${window.height}`);
+    }).catch((error) => {
+      console.error('❌ Failed to open chat window:', error);
+    });
+  }).catch((error) => {
+    console.error('❌ Failed to get current window for sizing:', error);
+    
+    // Fallback with optimal fixed dimensions (rectangular chat window shape)
+    chrome.windows.create({
+      url: chrome.runtime.getURL('chat/chat.html'),
+      type: 'popup',
+      width: 800, // Good width for chat interface
+      height: 700, // Taller than wide for chat messages
+      focused: true
+    });
+  });
 });
 
 // Global data storage

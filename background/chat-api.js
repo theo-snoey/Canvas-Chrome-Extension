@@ -8,9 +8,9 @@ console.log('🤖 Chat API module loading...');
  */
 class CanvasChatAPI {
   constructor() {
-    // PHASE 2.1: Hardcoded API credentials
-    this.apiKey = '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';
-    this.projectId = 'proj_D7pj7F1PvTdg2xo2R3MVQxhv';
+    // PHASE 2.1: Hardcoded API credentials (updated key)
+    this.apiKey = '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';
+    this.projectId = 'proj_D7pj7F1PvTdg2xo2R3MVQxhv'; // Will auto-detect if this works
     
     // API configuration
     this.baseUrl = 'https://api.openai.com/v1';
