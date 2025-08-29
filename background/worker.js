@@ -154,9 +154,16 @@ class TabManager {
     console.log(`Executing extractor in tab: ${tabId}`);
 
     try {
-      // Ensure our content extractor scripts are present in the tab context
-      // Avoid double-injecting extractor scripts to prevent re-declaration errors
-      // We'll rely on inline extractors for autonomous tasks
+      // PHASE 1.2: Inject enhanced data extractor into ghost tabs
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          files: ['content/data-extractor.js']
+        });
+        console.log(`📦 Enhanced data extractor injected into tab: ${tabId}`);
+      } catch (injectionError) {
+        console.warn(`⚠️ Failed to inject enhanced extractor into tab ${tabId}:`, injectionError.message);
+      }
 
       // Update last used time
       if (this.activeTabs.has(tabId)) {
@@ -1035,7 +1042,11 @@ class TabManager {
             this.storageManager.queryData({ type: 'grades' })
           ]);
           if (coursesQ?.success) canvasData.courses.push(...coursesQ.data);
-          if (assignmentsQ?.success) canvasData.assignments.push(...assignmentsQ.data);
+          if (assignmentsQ?.success) {
+            // PHASE 1.3: Filter assignments by date relevancy
+            const relevantAssignments = this.filterAssignmentsByRelevancy(assignmentsQ.data);
+            canvasData.assignments.push(...relevantAssignments);
+          }
           if (gradesQ?.success) canvasData.grades.push(...gradesQ.data);
         } catch (e) {
           console.warn('Query via storage manager failed:', e?.message || e);
@@ -1065,7 +1076,9 @@ class TabManager {
               canvasData.courses.push(...normalizeCourses(value.courses));
             }
             if (key.startsWith('canvas_course-assignments_') && value?.assignments) {
-              canvasData.assignments.push(...value.assignments);
+              // PHASE 1.3: Filter assignments by date relevancy
+              const relevantAssignments = this.filterAssignmentsByRelevancy(value.assignments);
+              canvasData.assignments.push(...relevantAssignments);
             }
             if (key.startsWith('canvas_course-grades_') && value?.grades) {
               canvasData.grades.push(...value.grades);
@@ -1112,7 +1125,11 @@ class TabManager {
                 if (value.result.courses) canvasData.courses.push(...value.result.courses);
                 break;
               case 'assignments':
-                if (value.result.assignments) canvasData.assignments.push(...value.result.assignments);
+                if (value.result.assignments) {
+                  // PHASE 1.3: Filter assignments by date relevancy
+                  const relevantAssignments = this.filterAssignmentsByRelevancy(value.result.assignments);
+                  canvasData.assignments.push(...relevantAssignments);
+                }
                 break;
               case 'grades':
                 if (value.result.grades) canvasData.grades.push(...value.result.grades);
@@ -1589,9 +1606,13 @@ class TabManager {
       
       console.log(`🔍 Found ${courses.length} courses for detailed scraping`);
       
-      if (courses.length > 0) {
+      // PHASE 1.3: Filter courses to focus on current semester only
+      const activeCourses = this.filterActiveCourses(courses);
+      console.log(`🎯 Filtered to ${activeCourses.length} active/current courses`);
+      
+      if (activeCourses.length > 0) {
 
-        for (const course of courses.slice(0, 5)) { // Limit to 5 courses to avoid overwhelming
+        for (const course of activeCourses) { // Use filtered active courses instead of arbitrary limit
           const courseId = course.id || this.extractCourseIdFromUrl(course.url);
           
           if (courseId) {
@@ -1760,6 +1781,278 @@ class TabManager {
     } catch (error) {
       console.error('Error generating detailed course tasks:', error);
     }
+  }
+
+  /**
+   * PHASE 1.3: Filter courses to focus on active/current semester only
+   */
+  filterActiveCourses(courses) {
+    console.log('🎯 Filtering courses for current semester focus...');
+    
+    const currentDate = new Date();
+    const currentYear = currentDate.getFullYear();
+    const currentMonth = currentDate.getMonth(); // 0-based (0 = January)
+    
+    // Determine current academic year and semester
+    const isSpringFall = currentMonth >= 7; // August-December is Fall, Jan-July is Spring/Summer
+    const academicYear = isSpringFall ? currentYear : currentYear - 1;
+    const nextAcademicYear = academicYear + 1;
+    
+    console.log(`📅 Current academic year: ${academicYear}-${nextAcademicYear.toString().slice(-2)}`);
+    console.log(`📅 Current month: ${currentMonth + 1} (${isSpringFall ? 'Fall semester' : 'Spring/Summer semester'})`);
+    
+    const activeCourses = courses.filter(course => {
+      const courseName = course.name || course.title || '';
+      const courseUrl = course.url || '';
+      
+      // Skip if no course name
+      if (!courseName) return false;
+      
+      // PHASE 1.3: Active course detection criteria
+      const isActive = this.isCourseActive(course, courseName, currentYear, academicYear);
+      
+      if (isActive) {
+        console.log(`✅ Active course: ${courseName}`);
+      } else {
+        console.log(`⏸️ Archived course: ${courseName}`);
+      }
+      
+      return isActive;
+    });
+    
+    // PHASE 1.3: Prioritize courses by recency and activity
+    const prioritizedCourses = this.prioritizeCoursesByActivity(activeCourses);
+    
+    return prioritizedCourses;
+  }
+
+  /**
+   * PHASE 1.3: Determine if a course is active/current
+   */
+  isCourseActive(course, courseName, currentYear, academicYear) {
+    const lowerName = courseName.toLowerCase();
+    
+    // 1. Check for current academic year patterns (include both current and previous academic year)
+    const currentYearPatterns = [
+      `${academicYear}-${(academicYear + 1).toString().slice(-2)}`, // 2025-26 (current)
+      `${academicYear - 1}-${academicYear.toString().slice(-2)}`, // 2024-25 (previous, still relevant)
+      `${academicYear}/${academicYear + 1}`, // 2025/2026
+      `${currentYear}`, // 2025
+      `${academicYear + 1}`, // 2026 (next year)
+      `${academicYear}` // 2025 (current academic year)
+    ];
+    
+    const hasCurrentYear = currentYearPatterns.some(pattern => lowerName.includes(pattern));
+    
+    // 2. Check for semester indicators
+    const currentMonth = new Date().getMonth();
+    const isSpringPeriod = currentMonth >= 0 && currentMonth <= 6; // Jan-July
+    const isFallPeriod = currentMonth >= 7 && currentMonth <= 11; // Aug-Dec
+    
+    const semesterKeywords = {
+      spring: ['spring', 'winter', 'january', 'february', 'march', 'april', 'may', 'june'],
+      fall: ['fall', 'autumn', 'august', 'september', 'october', 'november', 'december']
+    };
+    
+    const hasRelevantSemester = 
+      (isSpringPeriod && semesterKeywords.spring.some(word => lowerName.includes(word))) ||
+      (isFallPeriod && semesterKeywords.fall.some(word => lowerName.includes(word))) ||
+      !semesterKeywords.spring.concat(semesterKeywords.fall).some(word => lowerName.includes(word)); // No semester specified
+    
+    // 3. Exclude obviously old courses
+    const oldYearPatterns = [
+      `${academicYear - 2}-`, // 2022-23
+      `${academicYear - 1}-`, // 2023-24 (if we're in 2025)
+      `${currentYear - 2}`, // 2023
+      `${currentYear - 3}` // 2022
+    ];
+    
+    const isOldCourse = oldYearPatterns.some(pattern => lowerName.includes(pattern));
+    
+    // 4. Special handling for placement tests and ongoing courses
+    const isPlacementOrOngoing = [
+      'placement', 'orientation', 'onboarding', 'resources', 'training'
+    ].some(word => lowerName.includes(word));
+    
+    // 5. Dashboard presence indicates activity (courses shown on dashboard are typically active)
+    const isDashboardCourse = course.isDashboard || course.onDashboard || course.favorite;
+    
+    // Decision logic
+    if (isOldCourse && !isPlacementOrOngoing) {
+      return false; // Definitely old
+    }
+    
+    if (hasCurrentYear && hasRelevantSemester) {
+      return true; // Current year + relevant semester
+    }
+    
+    if (isPlacementOrOngoing) {
+      return true; // Ongoing/placement courses are usually active
+    }
+    
+    if (isDashboardCourse) {
+      return true; // Dashboard courses are typically active
+    }
+    
+    if (hasCurrentYear) {
+      return true; // Current year is a strong indicator
+    }
+    
+    // If no clear indicators, include it (better to include than exclude)
+    return !isOldCourse;
+  }
+
+  /**
+   * PHASE 1.3: Prioritize courses by activity and recency
+   */
+  prioritizeCoursesByActivity(courses) {
+    console.log('📊 Prioritizing courses by activity...');
+    
+    return courses.sort((a, b) => {
+      const aName = (a.name || a.title || '').toLowerCase();
+      const bName = (b.name || b.title || '').toLowerCase();
+      
+      // 1. Prioritize placement tests and current year courses
+      const aIsCurrent = aName.includes('2025') || aName.includes('2024-25');
+      const bIsCurrent = bName.includes('2025') || bName.includes('2024-25');
+      
+      if (aIsCurrent && !bIsCurrent) return -1;
+      if (!aIsCurrent && bIsCurrent) return 1;
+      
+      // 2. Prioritize by course type (academic courses over admin/training)
+      const aIsAcademic = !['residential', 'resources', 'training', 'onboarding'].some(word => aName.includes(word));
+      const bIsAcademic = !['residential', 'resources', 'training', 'onboarding'].some(word => bName.includes(word));
+      
+      if (aIsAcademic && !bIsAcademic) return -1;
+      if (!aIsAcademic && bIsAcademic) return 1;
+      
+      // 3. Sort alphabetically for consistent ordering
+      return aName.localeCompare(bName);
+    });
+  }
+
+  /**
+   * PHASE 1.3: Filter and prioritize assignments by date relevancy
+   */
+  filterAssignmentsByRelevancy(assignments) {
+    console.log('📅 Filtering assignments by date relevancy...');
+    
+    const currentDate = new Date();
+    const thirtyDaysAgo = new Date(currentDate.getTime() - (30 * 24 * 60 * 60 * 1000));
+    const sixtyDaysFromNow = new Date(currentDate.getTime() + (60 * 24 * 60 * 60 * 1000));
+    
+    const relevantAssignments = assignments.filter(assignment => {
+      // Parse due date from various possible formats
+      const dueDate = this.parseAssignmentDate(assignment.dueDate || assignment.due_at || assignment.due);
+      
+      if (!dueDate) {
+        // Include assignments without due dates (they might be ongoing)
+        return true;
+      }
+      
+      // Include assignments that are:
+      // 1. Due in the future (upcoming deadlines)
+      // 2. Due within the last 30 days (recent assignments)
+      const isRelevant = dueDate >= thirtyDaysAgo && dueDate <= sixtyDaysFromNow;
+      
+      if (isRelevant) {
+        console.log(`📋 Relevant assignment: ${assignment.name || assignment.title} (due: ${dueDate.toDateString()})`);
+      } else {
+        console.log(`⏸️ Filtered out old assignment: ${assignment.name || assignment.title} (due: ${dueDate.toDateString()})`);
+      }
+      
+      return isRelevant;
+    });
+    
+    // Sort by due date priority (upcoming deadlines first)
+    return this.prioritizeAssignmentsByUrgency(relevantAssignments);
+  }
+
+  /**
+   * PHASE 1.3: Parse assignment due date from various formats
+   */
+  parseAssignmentDate(dateString) {
+    if (!dateString) return null;
+    
+    // Handle various date formats
+    const date = new Date(dateString);
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      // Try parsing common formats manually
+      const formats = [
+        /(\d{1,2})\/(\d{1,2})\/(\d{4})/, // MM/DD/YYYY
+        /(\d{4})-(\d{1,2})-(\d{1,2})/, // YYYY-MM-DD
+        /(\w+)\s+(\d{1,2}),?\s+(\d{4})/ // Month DD, YYYY
+      ];
+      
+      for (const format of formats) {
+        const match = dateString.match(format);
+        if (match) {
+          try {
+            const parsedDate = new Date(dateString);
+            if (!isNaN(parsedDate.getTime())) {
+              return parsedDate;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+      
+      return null;
+    }
+    
+    return date;
+  }
+
+  /**
+   * PHASE 1.3: Prioritize assignments by urgency and importance
+   */
+  prioritizeAssignmentsByUrgency(assignments) {
+    console.log('⚡ Prioritizing assignments by urgency...');
+    
+    const currentDate = new Date();
+    
+    return assignments.sort((a, b) => {
+      const aDate = this.parseAssignmentDate(a.dueDate || a.due_at || a.due);
+      const bDate = this.parseAssignmentDate(b.dueDate || b.due_at || b.due);
+      
+      // Assignments without due dates go to the end
+      if (!aDate && bDate) return 1;
+      if (aDate && !bDate) return -1;
+      if (!aDate && !bDate) return 0;
+      
+      const aDaysUntilDue = Math.ceil((aDate - currentDate) / (1000 * 60 * 60 * 24));
+      const bDaysUntilDue = Math.ceil((bDate - currentDate) / (1000 * 60 * 60 * 24));
+      
+      // Prioritize by urgency:
+      // 1. Overdue assignments (negative days)
+      // 2. Due this week (0-7 days)
+      // 3. Due next week (8-14 days)
+      // 4. Due later (15+ days)
+      
+      const aUrgency = this.getAssignmentUrgency(aDaysUntilDue);
+      const bUrgency = this.getAssignmentUrgency(bDaysUntilDue);
+      
+      if (aUrgency !== bUrgency) {
+        return aUrgency - bUrgency; // Lower urgency number = higher priority
+      }
+      
+      // Within same urgency level, sort by due date
+      return aDate - bDate;
+    });
+  }
+
+  /**
+   * PHASE 1.3: Get assignment urgency level
+   */
+  getAssignmentUrgency(daysUntilDue) {
+    if (daysUntilDue < 0) return 0; // Overdue - highest priority
+    if (daysUntilDue <= 2) return 1; // Due in 2 days
+    if (daysUntilDue <= 7) return 2; // Due this week
+    if (daysUntilDue <= 14) return 3; // Due next week
+    return 4; // Due later
   }
 
   /**
@@ -2425,6 +2718,20 @@ class TabManager {
    */
   extractSyllabusData(courseId) {
     try {
+      // PHASE 1.2: Use enhanced syllabus extraction if available
+      if (typeof CanvasDataExtractor !== 'undefined') {
+        const extractor = new CanvasDataExtractor();
+        const enhancedData = extractor.extractSyllabusData();
+        
+        // Add courseId and return enhanced data
+        return {
+          ...enhancedData,
+          courseId,
+          extractedAt: new Date().toISOString()
+        };
+      }
+      
+      // Fallback to basic extraction
       const syllabusContent = document.querySelector('.syllabus, .course-syllabus, .user_content')?.textContent?.trim();
       const syllabusEvents = [];
       
@@ -2464,6 +2771,26 @@ class TabManager {
    */
   extractFilesData(courseId) {
     try {
+      // PHASE 1.2: Use enhanced files extraction if available
+      if (typeof CanvasDataExtractor !== 'undefined') {
+        const extractor = new CanvasDataExtractor();
+        const enhancedData = extractor.extractFilesData();
+        
+        // Add courseId to each file and return enhanced data
+        if (enhancedData.files) {
+          enhancedData.files.forEach(file => {
+            file.courseId = courseId;
+          });
+        }
+        
+        return {
+          ...enhancedData,
+          courseId,
+          extractedAt: new Date().toISOString()
+        };
+      }
+      
+      // Fallback to basic extraction
       const files = [];
       const fileItems = document.querySelectorAll('.file, .ef-item-row, .files-list li');
       
@@ -2497,6 +2824,104 @@ class TabManager {
         courseId,
         error: error.message,
         files: []
+      };
+    }
+  }
+
+  /**
+   * PHASE 1.2: Extract discussions data
+   */
+  extractDiscussionsData(courseId) {
+    try {
+      // PHASE 1.2: Use enhanced discussions extraction if available
+      if (typeof CanvasDataExtractor !== 'undefined') {
+        const extractor = new CanvasDataExtractor();
+        const enhancedData = extractor.extractDiscussionsData();
+        
+        // Add courseId and return enhanced data
+        return {
+          ...enhancedData,
+          courseId,
+          extractedAt: new Date().toISOString()
+        };
+      }
+      
+      // Fallback to basic extraction
+      const discussions = [];
+      const discussionItems = document.querySelectorAll('.discussion, .discussion-topic, .discussion-entry');
+      
+      discussionItems.forEach(item => {
+        const title = item.querySelector('.discussion-title, .title, h3')?.textContent?.trim();
+        const author = item.querySelector('.discussion-author, .author')?.textContent?.trim();
+        const date = item.querySelector('.discussion-date, .date')?.textContent?.trim();
+        const replies = item.querySelector('.reply-count')?.textContent?.trim();
+        
+        if (title) {
+          discussions.push({
+            title,
+            author,
+            date,
+            replies: parseInt(replies) || 0,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-discussions',
+        courseId,
+        discussions,
+        extractedAt: new Date().toISOString(),
+        count: discussions.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-discussions',
+        courseId,
+        error: error.message,
+        discussions: []
+      };
+    }
+  }
+
+  /**
+   * PHASE 1.2: Extract course grades data
+   */
+  extractCourseGrades(courseId) {
+    try {
+      const grades = [];
+      const gradeItems = document.querySelectorAll('.assignment_grade, .grade, .gradebook-cell');
+      
+      gradeItems.forEach(item => {
+        const assignment = item.querySelector('.assignment-name, .title')?.textContent?.trim();
+        const score = item.querySelector('.grade, .score')?.textContent?.trim();
+        const maxPoints = item.querySelector('.points-possible, .max-points')?.textContent?.trim();
+        const feedback = item.querySelector('.feedback, .comment')?.textContent?.trim();
+        
+        if (assignment || score) {
+          grades.push({
+            assignment,
+            score,
+            maxPoints,
+            feedback,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-grades',
+        courseId,
+        grades,
+        extractedAt: new Date().toISOString(),
+        count: grades.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-grades',
+        courseId,
+        error: error.message,
+        grades: []
       };
     }
   }

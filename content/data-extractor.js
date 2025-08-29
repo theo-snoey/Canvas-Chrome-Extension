@@ -1,5 +1,6 @@
-// Canvas LMS Data Extractor - Minimal Framework
+// Canvas LMS Data Extractor - Enhanced Content Extraction
 // Phase 3.1: DOM Scraping Foundation
+// Phase 1.2: Enhanced Content Extraction with file processing and deep content parsing
 
 console.log('Canvas Data Extractor loading...');
 
@@ -60,6 +61,16 @@ class CanvasDataExtractor {
     // Modules
     if (path.includes('/modules')) {
       return 'modules';
+    }
+
+    // Files - PHASE 1.2
+    if (path.includes('/files')) {
+      return 'files';
+    }
+
+    // Discussions - PHASE 1.2
+    if (path.includes('/discussion')) {
+      return 'discussions';
     }
 
     // Default to course if we can't determine
@@ -151,6 +162,18 @@ class CanvasDataExtractor {
           break;
         case 'course':
           extractedData = this.extractCourseData();
+          break;
+        case 'syllabus':
+          // PHASE 1.2: Enhanced syllabus extraction
+          extractedData = this.extractSyllabusData();
+          break;
+        case 'files':
+          // PHASE 1.2: File information extraction
+          extractedData = this.extractFilesData();
+          break;
+        case 'discussions':
+          // PHASE 1.2: Discussion extraction with thread structure
+          extractedData = this.extractDiscussionsData();
           break;
         default:
           extractedData = this.extractGenericData();
@@ -526,12 +549,35 @@ class CanvasDataExtractor {
           const dateElement = this.safeQuery('.announcement-date, .date, .published-date, time', announcement);
           const authorElement = this.safeQuery('.announcement-author, .author, .user-name', announcement);
 
-          return {
+          // PHASE 1.2: Enhanced content extraction for announcements
+          let content = this.safeTextContent(contentElement);
+          let enhancedContent = null;
+          
+          if (contentElement) {
+            enhancedContent = this.extractEnhancedHTMLContent(contentElement, {
+              preserveFormatting: true,
+              extractLinks: true,
+              extractImages: true,
+              extractTables: false
+            });
+            content = enhancedContent.text;
+          }
+
+          const announcementData = {
             title: this.safeTextContent(titleElement),
-            content: this.safeTextContent(contentElement),
+            content: content,
             date: this.safeTextContent(dateElement) || this.safeAttribute(dateElement, 'datetime'),
             author: this.safeTextContent(authorElement)
           };
+          
+          // Add enhanced content metadata if available
+          if (enhancedContent) {
+            announcementData.wordCount = enhancedContent.metadata.wordCount;
+            announcementData.links = enhancedContent.metadata.links;
+            announcementData.images = enhancedContent.metadata.images;
+          }
+          
+          return announcementData;
         }).filter(announcement => announcement.title);
 
         break;
@@ -678,5 +724,738 @@ try {
 } catch (error) {
   console.error('❌ Data extractor test failed:', error);
 }
-// Force reload Thu Aug 28 16:04:17 PDT 2025
-// Force reload Thu Aug 28 16:17:12 PDT 2025
+
+// ============ PHASE 1.2: ENHANCED CONTENT EXTRACTION METHODS ============
+
+/**
+ * Enhanced HTML content extraction with deep text parsing
+ */
+CanvasDataExtractor.prototype.extractEnhancedHTMLContent = function(element, options = {}) {
+  if (!element) return { text: '', structure: null, metadata: {} };
+  
+  const {
+    preserveFormatting = true,
+    extractLinks = true,
+    extractImages = true,
+    extractTables = true,
+    maxDepth = 10
+  } = options;
+  
+  console.log('🔍 Extracting enhanced HTML content...');
+  
+  const result = {
+    text: '',
+    structure: {},
+    metadata: {
+      wordCount: 0,
+      links: [],
+      images: [],
+      tables: [],
+      headings: [],
+      lists: [],
+      extractedAt: new Date().toISOString()
+    }
+  };
+  
+  try {
+    // Extract clean text content
+    result.text = this.extractCleanText(element, preserveFormatting);
+    result.metadata.wordCount = result.text.split(/\s+/).filter(word => word.length > 0).length;
+    
+    // Extract structural elements
+    if (extractLinks) {
+      result.metadata.links = this.extractLinks(element);
+    }
+    
+    if (extractImages) {
+      result.metadata.images = this.extractImages(element);
+    }
+    
+    if (extractTables) {
+      result.metadata.tables = this.extractTables(element);
+    }
+    
+    // Extract headings and structure
+    result.metadata.headings = this.extractHeadings(element);
+    result.metadata.lists = this.extractLists(element);
+    
+    console.log(`✅ Enhanced content extracted: ${result.metadata.wordCount} words, ${result.metadata.links.length} links, ${result.metadata.images.length} images`);
+    
+  } catch (error) {
+    console.error('❌ Enhanced HTML extraction failed:', error);
+    result.text = element.textContent || '';
+  }
+  
+  return result;
+};
+
+/**
+ * Extract clean, readable text while preserving important formatting
+ */
+CanvasDataExtractor.prototype.extractCleanText = function(element, preserveFormatting = true) {
+  if (!element) return '';
+  
+  // Clone element to avoid modifying original
+  const clone = element.cloneNode(true);
+  
+  // Remove script and style elements
+  const unwantedElements = clone.querySelectorAll('script, style, noscript, iframe');
+  unwantedElements.forEach(el => el.remove());
+  
+  if (preserveFormatting) {
+    // Convert block elements to add line breaks
+    const blockElements = clone.querySelectorAll('div, p, h1, h2, h3, h4, h5, h6, li, br');
+    blockElements.forEach(el => {
+      if (el.tagName === 'BR') {
+        el.textContent = '\n';
+      } else {
+        el.textContent = el.textContent + '\n';
+      }
+    });
+    
+    // Convert lists to formatted text
+    const lists = clone.querySelectorAll('ul, ol');
+    lists.forEach(list => {
+      const items = list.querySelectorAll('li');
+      items.forEach((item, index) => {
+        const prefix = list.tagName === 'OL' ? `${index + 1}. ` : '• ';
+        item.textContent = prefix + item.textContent.trim() + '\n';
+      });
+    });
+  }
+  
+  return clone.textContent
+    .replace(/\s+/g, ' ')
+    .replace(/\n\s*\n/g, '\n')
+    .trim();
+};
+
+/**
+ * Extract all links with metadata
+ */
+CanvasDataExtractor.prototype.extractLinks = function(element) {
+  const links = [];
+  const linkElements = element.querySelectorAll('a[href]');
+  
+  linkElements.forEach(link => {
+    const href = link.getAttribute('href');
+    const text = link.textContent.trim();
+    
+    if (href && text) {
+      links.push({
+        url: href,
+        text: text,
+        title: link.getAttribute('title') || '',
+        isExternal: href.startsWith('http') && !href.includes(window.location.hostname),
+        isCanvasLink: href.includes('/courses/') || href.includes('/assignments/') || href.includes('/files/')
+      });
+    }
+  });
+  
+  return links;
+};
+
+/**
+ * Extract images with metadata
+ */
+CanvasDataExtractor.prototype.extractImages = function(element) {
+  const images = [];
+  const imageElements = element.querySelectorAll('img');
+  
+  imageElements.forEach(img => {
+    const src = img.getAttribute('src');
+    const alt = img.getAttribute('alt') || '';
+    
+    if (src) {
+      images.push({
+        src: src,
+        alt: alt,
+        title: img.getAttribute('title') || '',
+        width: img.naturalWidth || img.getAttribute('width'),
+        height: img.naturalHeight || img.getAttribute('height')
+      });
+    }
+  });
+  
+  return images;
+};
+
+/**
+ * Extract table data with structure
+ */
+CanvasDataExtractor.prototype.extractTables = function(element) {
+  const tables = [];
+  const tableElements = element.querySelectorAll('table');
+  
+  tableElements.forEach(table => {
+    const tableData = {
+      headers: [],
+      rows: [],
+      caption: ''
+    };
+    
+    // Extract caption
+    const caption = table.querySelector('caption');
+    if (caption) {
+      tableData.caption = caption.textContent.trim();
+    }
+    
+    // Extract headers
+    const headerCells = table.querySelectorAll('thead th, tr:first-child th');
+    headerCells.forEach(th => {
+      tableData.headers.push(th.textContent.trim());
+    });
+    
+    // Extract rows
+    const rows = table.querySelectorAll('tbody tr, tr');
+    rows.forEach((row, index) => {
+      // Skip header row if no thead
+      if (index === 0 && !table.querySelector('thead') && row.querySelector('th')) {
+        return;
+      }
+      
+      const rowData = [];
+      const cells = row.querySelectorAll('td, th');
+      cells.forEach(cell => {
+        rowData.push(cell.textContent.trim());
+      });
+      
+      if (rowData.length > 0) {
+        tableData.rows.push(rowData);
+      }
+    });
+    
+    tables.push(tableData);
+  });
+  
+  return tables;
+};
+
+/**
+ * Extract heading hierarchy
+ */
+CanvasDataExtractor.prototype.extractHeadings = function(element) {
+  const headings = [];
+  const headingElements = element.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  
+  headingElements.forEach(heading => {
+    headings.push({
+      level: parseInt(heading.tagName.charAt(1)),
+      text: heading.textContent.trim(),
+      id: heading.getAttribute('id') || ''
+    });
+  });
+  
+  return headings;
+};
+
+/**
+ * Extract list structures
+ */
+CanvasDataExtractor.prototype.extractLists = function(element) {
+  const lists = [];
+  const listElements = element.querySelectorAll('ul, ol');
+  
+  listElements.forEach(list => {
+    const listData = {
+      type: list.tagName.toLowerCase(),
+      items: []
+    };
+    
+    const items = list.querySelectorAll('li');
+    items.forEach(item => {
+      listData.items.push(item.textContent.trim());
+    });
+    
+    lists.push(listData);
+  });
+  
+  return lists;
+};
+
+/**
+ * PHASE 1.2: Extract Canvas file information and prepare for text extraction
+ */
+CanvasDataExtractor.prototype.extractFilesData = function() {
+  console.log('🗂️ Extracting Canvas files data...');
+  
+  const files = [];
+  
+  // Look for file links in various contexts
+  const fileSelectors = [
+    'a[href*="/files/"]',
+    'a[href*="/courses/"][href*="/files/"]',
+    '.file_list a',
+    '.files a',
+    '.attachment a',
+    'a.instructure_file_link',
+    'a[href$=".pdf"]',
+    'a[href$=".doc"]',
+    'a[href$=".docx"]',
+    'a[href$=".ppt"]',
+    'a[href$=".pptx"]',
+    'a[href$=".txt"]'
+  ];
+  
+  fileSelectors.forEach(selector => {
+    const fileElements = this.safeQueryAll(selector);
+    
+    fileElements.forEach(fileElement => {
+      const href = fileElement.getAttribute('href');
+      const fileName = fileElement.textContent.trim() || 
+                      fileElement.getAttribute('title') || 
+                      href?.split('/').pop() || '';
+      
+      if (href && fileName) {
+        const fileInfo = {
+          name: fileName,
+          url: href,
+          type: this.getFileType(fileName, href),
+          size: this.extractFileSize(fileElement),
+          downloadable: this.isDownloadableFile(href),
+          extractable: this.isExtractableFile(fileName),
+          context: this.getFileContext(fileElement)
+        };
+        
+        files.push(fileInfo);
+      }
+    });
+  });
+  
+  console.log(`✅ Found ${files.length} files for potential extraction`);
+  return { files, type: 'files' };
+};
+
+/**
+ * Determine file type from name or URL
+ */
+CanvasDataExtractor.prototype.getFileType = function(fileName, url) {
+  const extension = fileName.split('.').pop()?.toLowerCase() || '';
+  
+  const typeMap = {
+    'pdf': 'pdf',
+    'doc': 'word',
+    'docx': 'word',
+    'ppt': 'powerpoint',
+    'pptx': 'powerpoint',
+    'txt': 'text',
+    'rtf': 'text',
+    'html': 'html',
+    'htm': 'html',
+    'jpg': 'image',
+    'jpeg': 'image',
+    'png': 'image',
+    'gif': 'image'
+  };
+  
+  return typeMap[extension] || 'unknown';
+};
+
+/**
+ * Extract file size information if available
+ */
+CanvasDataExtractor.prototype.extractFileSize = function(fileElement) {
+  // Look for size information in nearby elements
+  const sizeSelectors = [
+    '.file-size',
+    '.size',
+    '.file_size'
+  ];
+  
+  for (const selector of sizeSelectors) {
+    const sizeElement = fileElement.parentElement?.querySelector(selector) || 
+                       fileElement.querySelector(selector);
+    if (sizeElement) {
+      return sizeElement.textContent.trim();
+    }
+  }
+  
+  return null;
+};
+
+/**
+ * Check if file can be downloaded directly
+ */
+CanvasDataExtractor.prototype.isDownloadableFile = function(url) {
+  return url.includes('/files/') || 
+         url.includes('download') ||
+         /\.(pdf|doc|docx|txt|rtf)$/i.test(url);
+};
+
+/**
+ * Check if file type supports text extraction
+ */
+CanvasDataExtractor.prototype.isExtractableFile = function(fileName) {
+  const extractableTypes = ['pdf', 'doc', 'docx', 'txt', 'rtf', 'html', 'htm'];
+  const extension = fileName.split('.').pop()?.toLowerCase() || '';
+  return extractableTypes.includes(extension);
+};
+
+/**
+ * Get context information about where the file was found
+ */
+CanvasDataExtractor.prototype.getFileContext = function(fileElement) {
+  // Try to determine the context (syllabus, assignment, module, etc.)
+  const contextElements = fileElement.closest('.module-item, .assignment, .syllabus, .content');
+  
+  if (contextElements) {
+    const contextTitle = contextElements.querySelector('h1, h2, h3, .title, .name');
+    if (contextTitle) {
+      return contextTitle.textContent.trim();
+    }
+  }
+  
+  return 'general';
+};
+
+/**
+ * PHASE 1.2: Deep syllabus extraction with assignment parsing
+ */
+CanvasDataExtractor.prototype.extractSyllabusData = function() {
+  console.log('📋 Deep extracting syllabus data...');
+  
+  const syllabusData = {
+    type: 'syllabus',
+    content: '',
+    structure: {},
+    assignments: [],
+    schedule: [],
+    policies: {},
+    readings: [],
+    metadata: {}
+  };
+  
+  // Find the main syllabus content area
+  const syllabusSelectors = [
+    '.syllabus_course_summary',
+    '.user_content',
+    '.course-syllabus',
+    '.syllabus-content',
+    '#course_syllabus',
+    '.show-content'
+  ];
+  
+  let syllabusElement = null;
+  for (const selector of syllabusSelectors) {
+    syllabusElement = this.safeQuery(selector);
+    if (syllabusElement) break;
+  }
+  
+  if (syllabusElement) {
+    // Extract enhanced HTML content
+    const enhancedContent = this.extractEnhancedHTMLContent(syllabusElement, {
+      preserveFormatting: true,
+      extractLinks: true,
+      extractImages: true,
+      extractTables: true
+    });
+    
+    syllabusData.content = enhancedContent.text;
+    syllabusData.structure = enhancedContent.structure;
+    syllabusData.metadata = enhancedContent.metadata;
+    
+    // Extract assignments from syllabus content
+    syllabusData.assignments = this.extractAssignmentsFromText(enhancedContent.text);
+    
+    // Extract schedule information
+    syllabusData.schedule = this.extractScheduleFromContent(syllabusElement, enhancedContent);
+    
+    // Extract reading assignments
+    syllabusData.readings = this.extractReadingsFromText(enhancedContent.text);
+    
+    // Extract course policies
+    syllabusData.policies = this.extractPoliciesFromText(enhancedContent.text);
+  }
+  
+  console.log(`✅ Syllabus extraction complete: ${syllabusData.assignments.length} assignments, ${syllabusData.readings.length} readings`);
+  return syllabusData;
+};
+
+/**
+ * Extract assignment information from text content
+ */
+CanvasDataExtractor.prototype.extractAssignmentsFromText = function(text) {
+  const assignments = [];
+  
+  // Look for assignment patterns in text
+  const assignmentPatterns = [
+    /(?:assignment|homework|hw|paper|essay|project|quiz|exam|test|midterm|final)[\s\d]*[:\-]?\s*(.+?)(?:due|deadline|submit)[\s\w]*?(\d{1,2}\/\d{1,2}\/?\d{0,4}|\w+\s+\d{1,2})/gi,
+    /due\s+(\w+\s+\d{1,2}(?:,?\s+\d{4})?)[:\-]?\s*(.+?)(?:\n|\.)/gi,
+    /(\d{1,2}\/\d{1,2}\/?\d{0,4})[:\-]\s*(.+?)(?:assignment|homework|hw|paper|essay|project|quiz|exam)/gi
+  ];
+  
+  assignmentPatterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      assignments.push({
+        title: match[1] || match[2] || 'Unknown Assignment',
+        dueDate: match[2] || match[1] || null,
+        type: this.classifyAssignmentType(match[0]),
+        source: 'syllabus'
+      });
+    }
+  });
+  
+  return assignments;
+};
+
+/**
+ * Extract reading assignments from text
+ */
+CanvasDataExtractor.prototype.extractReadingsFromText = function(text) {
+  const readings = [];
+  
+  // Look for reading patterns
+  const readingPatterns = [
+    /read[ing]*\s*[:\-]?\s*(.+?)(?:\n|\.|\,)/gi,
+    /chapter\s+(\d+)[:\-]?\s*(.+?)(?:\n|\.)/gi,
+    /pages?\s+(\d+[\-–]\d+)[:\-]?\s*(.+?)(?:\n|\.)/gi
+  ];
+  
+  readingPatterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      readings.push({
+        text: match[0].trim(),
+        reference: match[1] || match[2] || '',
+        type: 'reading'
+      });
+    }
+  });
+  
+  return readings;
+};
+
+/**
+ * Classify assignment type from text
+ */
+CanvasDataExtractor.prototype.classifyAssignmentType = function(text) {
+  const lowerText = text.toLowerCase();
+  
+  if (lowerText.includes('quiz')) return 'quiz';
+  if (lowerText.includes('exam') || lowerText.includes('test')) return 'exam';
+  if (lowerText.includes('paper') || lowerText.includes('essay')) return 'paper';
+  if (lowerText.includes('project')) return 'project';
+  if (lowerText.includes('homework') || lowerText.includes('hw')) return 'homework';
+  if (lowerText.includes('assignment')) return 'assignment';
+  
+  return 'other';
+};
+
+/**
+ * Extract schedule information from syllabus
+ */
+CanvasDataExtractor.prototype.extractScheduleFromContent = function(element, enhancedContent) {
+  const schedule = [];
+  
+  // Look for tables that might contain schedule information
+  if (enhancedContent.metadata.tables) {
+    enhancedContent.metadata.tables.forEach(table => {
+      if (this.isScheduleTable(table)) {
+        table.rows.forEach(row => {
+          if (row.length >= 2) {
+            schedule.push({
+              date: row[0],
+              topic: row[1],
+              reading: row[2] || null,
+              assignment: row[3] || null
+            });
+          }
+        });
+      }
+    });
+  }
+  
+  return schedule;
+};
+
+/**
+ * Check if a table contains schedule information
+ */
+CanvasDataExtractor.prototype.isScheduleTable = function(table) {
+  const headers = table.headers.map(h => h.toLowerCase());
+  const scheduleKeywords = ['date', 'week', 'topic', 'reading', 'assignment', 'due'];
+  
+  return scheduleKeywords.some(keyword => 
+    headers.some(header => header.includes(keyword))
+  );
+};
+
+/**
+ * Extract course policies from text
+ */
+CanvasDataExtractor.prototype.extractPoliciesFromText = function(text) {
+  const policies = {};
+  
+  // Look for common policy sections
+  const policyPatterns = {
+    attendance: /attendance[:\-]?\s*(.+?)(?:\n\n|\n[A-Z])/gi,
+    grading: /grading[:\-]?\s*(.+?)(?:\n\n|\n[A-Z])/gi,
+    late: /late\s+work[:\-]?\s*(.+?)(?:\n\n|\n[A-Z])/gi,
+    academic: /academic\s+integrity[:\-]?\s*(.+?)(?:\n\n|\n[A-Z])/gi
+  };
+  
+  Object.keys(policyPatterns).forEach(policyType => {
+    const match = policyPatterns[policyType].exec(text);
+    if (match) {
+      policies[policyType] = match[1].trim();
+    }
+  });
+  
+  return policies;
+};
+
+/**
+ * PHASE 1.2: Extract discussion data with thread structure preservation
+ */
+CanvasDataExtractor.prototype.extractDiscussionsData = function() {
+  console.log('💬 Extracting discussion data with thread structure...');
+  
+  const discussionsData = {
+    type: 'discussions',
+    topics: [],
+    posts: [],
+    metadata: {
+      totalTopics: 0,
+      totalPosts: 0,
+      totalReplies: 0,
+      extractedAt: new Date().toISOString()
+    }
+  };
+  
+  // Extract discussion topics
+  const topicSelectors = [
+    '.discussion-topic',
+    '.discussion_topic',
+    '.discussion-list-item',
+    '.discussion-row'
+  ];
+  
+  topicSelectors.forEach(selector => {
+    const topics = this.safeQueryAll(selector);
+    topics.forEach(topicElement => {
+      const topic = this.extractDiscussionTopic(topicElement);
+      if (topic) {
+        discussionsData.topics.push(topic);
+      }
+    });
+  });
+  
+  // Extract individual discussion posts and replies
+  const postSelectors = [
+    '.discussion-entry',
+    '.discussion_entry',
+    '.discussion-post',
+    '.message'
+  ];
+  
+  postSelectors.forEach(selector => {
+    const posts = this.safeQueryAll(selector);
+    posts.forEach(postElement => {
+      const post = this.extractDiscussionPost(postElement);
+      if (post) {
+        discussionsData.posts.push(post);
+      }
+    });
+  });
+  
+  // Update metadata
+  discussionsData.metadata.totalTopics = discussionsData.topics.length;
+  discussionsData.metadata.totalPosts = discussionsData.posts.filter(p => !p.isReply).length;
+  discussionsData.metadata.totalReplies = discussionsData.posts.filter(p => p.isReply).length;
+  
+  console.log(`✅ Discussion extraction complete: ${discussionsData.metadata.totalTopics} topics, ${discussionsData.metadata.totalPosts} posts, ${discussionsData.metadata.totalReplies} replies`);
+  return discussionsData;
+};
+
+/**
+ * Extract individual discussion topic information
+ */
+CanvasDataExtractor.prototype.extractDiscussionTopic = function(topicElement) {
+  const titleElement = this.safeQuery('.discussion-title, .title, h3, h4', topicElement);
+  const authorElement = this.safeQuery('.author, .discussion-author, .user-name', topicElement);
+  const dateElement = this.safeQuery('.date, .created-at, .posted-at', topicElement);
+  const replyCountElement = this.safeQuery('.reply-count, .replies', topicElement);
+  
+  const title = this.safeTextContent(titleElement);
+  if (!title) return null;
+  
+  return {
+    title: title,
+    author: this.safeTextContent(authorElement),
+    date: this.safeTextContent(dateElement) || this.safeAttribute(dateElement, 'datetime'),
+    replyCount: parseInt(this.safeTextContent(replyCountElement)) || 0,
+    url: this.safeAttribute(this.safeQuery('a', topicElement), 'href'),
+    type: 'topic'
+  };
+};
+
+/**
+ * Extract individual discussion post with enhanced content
+ */
+CanvasDataExtractor.prototype.extractDiscussionPost = function(postElement) {
+  const authorElement = this.safeQuery('.author, .discussion-author, .user-name', postElement);
+  const dateElement = this.safeQuery('.date, .created-at, .posted-at', postElement);
+  const contentElement = this.safeQuery('.message, .user_content, .discussion-text', postElement);
+  
+  const author = this.safeTextContent(authorElement);
+  if (!author && !contentElement) return null;
+  
+  // Extract enhanced content
+  let content = '';
+  let enhancedContent = null;
+  
+  if (contentElement) {
+    enhancedContent = this.extractEnhancedHTMLContent(contentElement, {
+      preserveFormatting: true,
+      extractLinks: true,
+      extractImages: true,
+      extractTables: true
+    });
+    content = enhancedContent.text;
+  }
+  
+  // Determine if this is a reply based on DOM structure
+  const isReply = postElement.closest('.replies, .discussion-replies') !== null ||
+                  postElement.classList.contains('reply') ||
+                  postElement.classList.contains('discussion-reply');
+  
+  const postData = {
+    author: author,
+    content: content,
+    date: this.safeTextContent(dateElement) || this.safeAttribute(dateElement, 'datetime'),
+    isReply: isReply,
+    threadLevel: this.getThreadLevel(postElement),
+    type: 'post'
+  };
+  
+  // Add enhanced content metadata
+  if (enhancedContent) {
+    postData.wordCount = enhancedContent.metadata.wordCount;
+    postData.links = enhancedContent.metadata.links;
+    postData.images = enhancedContent.metadata.images;
+  }
+  
+  return postData;
+};
+
+/**
+ * Determine the thread level (nesting depth) of a discussion post
+ */
+CanvasDataExtractor.prototype.getThreadLevel = function(postElement) {
+  let level = 0;
+  let parent = postElement.parentElement;
+  
+  while (parent && level < 10) { // Prevent infinite loops
+    if (parent.classList.contains('replies') || 
+        parent.classList.contains('discussion-replies') ||
+        parent.classList.contains('nested-discussion')) {
+      level++;
+    }
+    parent = parent.parentElement;
+  }
+  
+  return level;
+};
+
+// Phase 1.2 Enhanced Content Extraction - Thu Aug 29 2025
