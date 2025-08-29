@@ -20,6 +20,14 @@ try {
   console.error('❌ Failed to load NLP Processor:', error);
 }
 
+// PHASE 2.1: Import Chat API for OpenAI integration
+try {
+  importScripts('chat-api.js');
+  console.log('🤖 Chat API loaded successfully');
+} catch (error) {
+  console.error('❌ Failed to load Chat API:', error);
+}
+
 // Debug: Log when the script is fully loaded
 console.log('🚀 Background worker initialization starting...');
 
@@ -3284,55 +3292,100 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const conversationId = request.data?.conversationId || 'unknown';
       const messageId = request.data?.message?.id || 'unknown';
       
-      // Enhanced NLP processing (Phase 5.2)
-      if (tabManager.nlpProcessor) {
+      // PHASE 2.1: Chat API processing with OpenAI
+      if (canvasChatAPI) {
         // Get Canvas data for context
         tabManager.getCanvasDataForNLP().then(async (canvasData) => {
           try {
             const startTime = Date.now();
             
-            // Process with NLP engine
-            const nlpResult = await tabManager.nlpProcessor.processQuery(
-              userMessage, 
-              conversationId, 
-              canvasData
-            );
+            console.log('📤 Sending to OpenAI Chat API...');
+            console.log(`📊 Context: ${canvasData.courses?.length || 0} courses, ${canvasData.assignments?.length || 0} assignments`);
+            
+            // Process with Chat API
+            const apiResponse = await canvasChatAPI.sendChatMessage(userMessage, canvasData);
             
             const processingTime = Date.now() - startTime;
             
+            console.log(`✅ Chat API response received in ${processingTime}ms`);
+            
             sendResponse({
               success: true,
-              reply: nlpResult.response,
+              reply: apiResponse,
               metadata: {
                 processedAt: new Date().toISOString(),
                 conversationId: conversationId,
                 messageId: messageId,
                 processingTime: processingTime,
-                intent: nlpResult.intent,
-                confidence: nlpResult.confidence,
-                parameters: nlpResult.parameters,
-                suggestions: nlpResult.suggestions,
+                processor: 'chat-api',
+                model: canvasChatAPI.model,
+                apiStatus: canvasChatAPI.getAPIStatus(),
                 nlpEnabled: true
               }
             });
             
           } catch (error) {
-            console.error('❌ NLP processing failed:', error);
-            sendResponse({
-              success: true,
-              reply: "I'm having trouble processing your question right now. Could you please try rephrasing it?",
-              metadata: {
-                processedAt: new Date().toISOString(),
-                conversationId: conversationId,
-                messageId: messageId,
-                processingTime: Date.now() - Date.now(),
-                error: error.message,
-                nlpEnabled: false
+            console.error('❌ Chat API processing failed:', error);
+            
+            // PHASE 2.1: Fallback to local NLP if Chat API fails
+            if (tabManager.nlpProcessor) {
+              console.log('🔄 Falling back to local NLP processing...');
+              
+              try {
+                const nlpResult = await tabManager.nlpProcessor.processQuery(
+                  userMessage, 
+                  conversationId, 
+                  canvasData
+                );
+                
+                sendResponse({
+                  success: true,
+                  reply: nlpResult.response,
+                  metadata: {
+                    processedAt: new Date().toISOString(),
+                    conversationId: conversationId,
+                    messageId: messageId,
+                    processingTime: Date.now() - startTime,
+                    processor: 'nlp-fallback',
+                    apiError: error.message,
+                    intent: nlpResult.intent,
+                    confidence: nlpResult.confidence
+                  }
+                });
+                
+              } catch (nlpError) {
+                console.error('❌ NLP fallback also failed:', nlpError);
+                sendResponse({
+                  success: true,
+                  reply: "I'm having trouble processing your question right now. Please check your internet connection and try again.",
+                  metadata: {
+                    processedAt: new Date().toISOString(),
+                    conversationId: conversationId,
+                    messageId: messageId,
+                    processingTime: Date.now() - startTime,
+                    processor: 'error',
+                    apiError: error.message,
+                    nlpError: nlpError.message
+                  }
+                });
               }
-            });
+            } else {
+              sendResponse({
+                success: true,
+                reply: "Chat API is unavailable and no fallback processor found. Please try again later.",
+                metadata: {
+                  processedAt: new Date().toISOString(),
+                  conversationId: conversationId,
+                  messageId: messageId,
+                  processingTime: Date.now() - startTime,
+                  processor: 'error',
+                  error: error.message
+                }
+              });
+            }
           }
         }).catch(error => {
-          console.error('❌ Failed to get Canvas data for NLP:', error);
+          console.error('❌ Failed to get Canvas data for Chat API:', error);
           sendResponse({
             success: true,
             reply: "I'm having trouble accessing your Canvas data right now. Please make sure you're logged into Canvas and try again.",
