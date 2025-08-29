@@ -3,6 +3,9 @@
 
 console.log('Canvas Assistant background service worker loaded');
 
+// Debug: Log when the script is fully loaded
+console.log('🚀 Background worker initialization starting...');
+
 // Autonomous Background System Configuration
 const AUTONOMOUS_CONFIG = {
   syncInterval: 5 * 60 * 1000, // 5 minutes in milliseconds
@@ -499,14 +502,22 @@ class TabManager {
   }
 
   /**
-   * Process data collection queue
+   * Process data collection queue with priority handling (Phase 4.2)
    */
   async processDataCollectionQueue() {
     if (!this.sessionState.isAuthenticated || this.activeTabs.size >= this.maxConcurrentTabs) {
       return; // Wait for authentication or available tabs
     }
 
-    const pendingTasks = this.dataCollectionQueue.filter(task => task.status === 'queued');
+    // Sort tasks by priority: high -> medium -> low
+    const pendingTasks = this.dataCollectionQueue
+      .filter(task => task.status === 'queued')
+      .sort((a, b) => {
+        const priorityOrder = { 'high': 0, 'medium': 1, 'low': 2 };
+        return (priorityOrder[a.priority] || 1) - (priorityOrder[b.priority] || 1);
+      });
+
+    console.log(`Processing ${pendingTasks.length} queued tasks (prioritized)`);
 
     for (const task of pendingTasks) {
       if (this.activeTabs.size >= this.maxConcurrentTabs) {
@@ -650,7 +661,7 @@ class TabManager {
   }
 
   /**
-   * Generate autonomous sync tasks
+   * Generate comprehensive autonomous sync tasks for Phase 4.2
    */
   generateSyncTasks() {
     const tasks = [];
@@ -662,12 +673,15 @@ class TabManager {
 
     const baseUrl = `https://${this.sessionState.canvasDomain}`;
 
-    // Dashboard data task
+    // Phase 4.2: Comprehensive Semester Data Collection
+    console.log('🎯 Generating comprehensive semester data collection tasks...');
+
+    // 1. Dashboard - Get overview and enrolled courses
     tasks.push({
       type: 'dashboard',
+      priority: 'high',
       url: `${baseUrl}/`,
       extractorFunction: () => {
-        // This would call the existing data extractor
         if (window.CanvasDataExtractor) {
           return window.CanvasDataExtractor.extractCurrentPage();
         }
@@ -675,9 +689,10 @@ class TabManager {
       }
     });
 
-    // Courses data task
+    // 2. Courses List - Get all available courses
     tasks.push({
       type: 'courses-list',
+      priority: 'high',
       url: `${baseUrl}/courses`,
       extractorFunction: () => {
         if (window.CanvasDataExtractor) {
@@ -687,28 +702,410 @@ class TabManager {
       }
     });
 
+    // 3. Get course IDs from storage for detailed scraping
+    this.generateDetailedCourseTasks(tasks, baseUrl);
+
+    // 4. Calendar - Get upcoming assignments and events
+    tasks.push({
+      type: 'calendar',
+      priority: 'medium',
+      url: `${baseUrl}/calendar`,
+      extractorFunction: () => {
+        return this.extractCalendarData();
+      }
+    });
+
+    // 5. Grades - Overall grade summary
+    tasks.push({
+      type: 'grades-summary',
+      priority: 'high',
+      url: `${baseUrl}/grades`,
+      extractorFunction: () => {
+        return this.extractGradesSummary();
+      }
+    });
+
+    // 6. To Do List - Current tasks
+    tasks.push({
+      type: 'todo',
+      priority: 'high',
+      url: `${baseUrl}/#todo`,
+      extractorFunction: () => {
+        return this.extractTodoList();
+      }
+    });
+
+    console.log(`Generated ${tasks.length} comprehensive sync tasks`);
     return tasks;
   }
 
   /**
-   * Store task result in chrome storage
+   * Generate detailed course-specific tasks
+   */
+  async generateDetailedCourseTasks(tasks, baseUrl) {
+    try {
+      // Get course IDs from previous dashboard extraction
+      const storedData = await chrome.storage.local.get('autonomous_data_dashboard');
+      const dashboardData = storedData.autonomous_data_dashboard;
+
+      if (dashboardData && dashboardData.result && dashboardData.result.data && dashboardData.result.data.courses) {
+        const courses = dashboardData.result.data.courses;
+        console.log(`Found ${courses.length} courses for detailed scraping`);
+
+        for (const course of courses.slice(0, 5)) { // Limit to 5 courses to avoid overwhelming
+          const courseId = course.id || this.extractCourseIdFromUrl(course.url);
+          
+          if (courseId) {
+            // Course home page
+            tasks.push({
+              type: 'course-home',
+              priority: 'high',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}`,
+              extractorFunction: () => {
+                if (window.CanvasDataExtractor) {
+                  return window.CanvasDataExtractor.extractCurrentPage();
+                }
+                return { type: 'course', error: 'DataExtractor not available' };
+              }
+            });
+
+            // Course assignments
+            tasks.push({
+              type: 'course-assignments',
+              priority: 'high',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/assignments`,
+              extractorFunction: () => {
+                return this.extractAssignmentsData(courseId);
+              }
+            });
+
+            // Course grades
+            tasks.push({
+              type: 'course-grades',
+              priority: 'high',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/grades`,
+              extractorFunction: () => {
+                return this.extractCourseGrades(courseId);
+              }
+            });
+
+            // Course announcements
+            tasks.push({
+              type: 'course-announcements',
+              priority: 'medium',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/announcements`,
+              extractorFunction: () => {
+                return this.extractAnnouncementsData(courseId);
+              }
+            });
+
+            // Course discussions
+            tasks.push({
+              type: 'course-discussions',
+              priority: 'medium',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/discussion_topics`,
+              extractorFunction: () => {
+                return this.extractDiscussionsData(courseId);
+              }
+            });
+
+            // Course modules
+            tasks.push({
+              type: 'course-modules',
+              priority: 'medium',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/modules`,
+              extractorFunction: () => {
+                return this.extractModulesData(courseId);
+              }
+            });
+
+            // Course syllabus
+            tasks.push({
+              type: 'course-syllabus',
+              priority: 'low',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/assignments/syllabus`,
+              extractorFunction: () => {
+                return this.extractSyllabusData(courseId);
+              }
+            });
+
+            // Course files
+            tasks.push({
+              type: 'course-files',
+              priority: 'low',
+              courseId: courseId,
+              courseName: course.name,
+              url: `${baseUrl}/courses/${courseId}/files`,
+              extractorFunction: () => {
+                return this.extractFilesData(courseId);
+              }
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error generating detailed course tasks:', error);
+    }
+  }
+
+  /**
+   * Extract course ID from Canvas URL
+   */
+  extractCourseIdFromUrl(url) {
+    if (!url) return null;
+    const match = url.match(/\/courses\/(\d+)/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * Store task result with smart data management (Phase 4.2)
    */
   async storeTaskResult(task, result) {
     try {
       const storageKey = `autonomous_data_${task.type}`;
+      const courseKey = task.courseId ? `_${task.courseId}` : '';
+      const fullKey = `${storageKey}${courseKey}`;
+      
+      // Get existing data for incremental updates
+      const existingData = await chrome.storage.local.get(fullKey);
+      const previousData = existingData[fullKey];
+      
+      // Calculate data quality score
+      const dataQuality = this.calculateDataQuality(result, task.type);
+      
+      // Check if this is actually new/changed data
+      const isNewData = this.isDataChanged(previousData?.result, result);
+      
       const storageData = {
-        [storageKey]: {
+        [fullKey]: {
           result,
           taskId: task.id,
           timestamp: new Date().toISOString(),
-          dataType: task.type
+          dataType: task.type,
+          courseId: task.courseId,
+          courseName: task.courseName,
+          priority: task.priority,
+          dataQuality,
+          isNewData,
+          version: (previousData?.version || 0) + 1,
+          lastChanged: isNewData ? new Date().toISOString() : previousData?.lastChanged,
+          syncCount: (previousData?.syncCount || 0) + 1
         }
       };
 
       await chrome.storage.local.set(storageData);
-      console.log(`Stored autonomous data for ${task.type}`);
+      
+      // Update comprehensive semester data index
+      await this.updateSemesterDataIndex(task, result, dataQuality);
+      
+      console.log(`📊 Stored ${task.type} data (Quality: ${dataQuality}%, New: ${isNewData}, Version: ${storageData[fullKey].version})`);
+      
+      // Clean up old data if needed
+      if (storageData[fullKey].version % 10 === 0) { // Every 10 versions
+        await this.cleanupOldData(task.type);
+      }
+      
     } catch (error) {
       console.error('Failed to store task result:', error);
+    }
+  }
+
+  /**
+   * Calculate data quality score based on extracted data
+   */
+  calculateDataQuality(result, dataType) {
+    if (!result || result.error) {
+      return 0;
+    }
+
+    let score = 0;
+    let maxScore = 0;
+
+    switch (dataType) {
+      case 'dashboard':
+        maxScore = 100;
+        if (result.data?.courses?.length > 0) score += 40;
+        if (result.data?.announcements?.length > 0) score += 20;
+        if (result.data?.upcomingAssignments?.length > 0) score += 20;
+        if (result.title) score += 10;
+        if (result.timestamp) score += 10;
+        break;
+
+      case 'course-home':
+        maxScore = 100;
+        if (result.data?.courseInfo?.name) score += 30;
+        if (result.data?.instructor?.name) score += 20;
+        if (result.data?.navigation?.length > 0) score += 25;
+        if (result.data?.announcements) score += 15;
+        if (result.data?.stats) score += 10;
+        break;
+
+      case 'course-assignments':
+        maxScore = 100;
+        if (result.assignments?.length > 0) score += 60;
+        if (result.assignments?.some(a => a.dueDate)) score += 20;
+        if (result.assignments?.some(a => a.points)) score += 20;
+        break;
+
+      case 'course-grades':
+        maxScore = 100;
+        if (result.grades?.length > 0) score += 70;
+        if (result.grades?.some(g => g.percentage)) score += 30;
+        break;
+
+      default:
+        maxScore = 100;
+        if (result.count > 0) score += 50;
+        if (result.extractedAt) score += 25;
+        if (!result.error) score += 25;
+    }
+
+    return Math.min(Math.round((score / maxScore) * 100), 100);
+  }
+
+  /**
+   * Check if data has actually changed (incremental updates)
+   */
+  isDataChanged(oldData, newData) {
+    if (!oldData) return true; // First time data
+    
+    try {
+      // Simple deep comparison for key fields
+      const oldJson = JSON.stringify(this.normalizeDataForComparison(oldData));
+      const newJson = JSON.stringify(this.normalizeDataForComparison(newData));
+      return oldJson !== newJson;
+    } catch (error) {
+      return true; // Assume changed if comparison fails
+    }
+  }
+
+  /**
+   * Normalize data for comparison (remove timestamps, etc.)
+   */
+  normalizeDataForComparison(data) {
+    if (!data) return null;
+    
+    const normalized = { ...data };
+    
+    // Remove timestamp fields that always change
+    delete normalized.timestamp;
+    delete normalized.extractedAt;
+    delete normalized.lastSync;
+    
+    return normalized;
+  }
+
+  /**
+   * Update comprehensive semester data index
+   */
+  async updateSemesterDataIndex(task, result, dataQuality) {
+    try {
+      const indexKey = 'autonomous_semester_index';
+      const existingIndex = await chrome.storage.local.get(indexKey);
+      const index = existingIndex[indexKey] || {
+        lastUpdated: new Date().toISOString(),
+        totalTasks: 0,
+        completedTasks: 0,
+        averageQuality: 0,
+        dataTypes: {},
+        courses: {},
+        summary: {}
+      };
+
+      // Update task counts
+      index.totalTasks++;
+      index.completedTasks++;
+      index.lastUpdated = new Date().toISOString();
+
+      // Update data type tracking
+      if (!index.dataTypes[task.type]) {
+        index.dataTypes[task.type] = { count: 0, totalQuality: 0, averageQuality: 0 };
+      }
+      index.dataTypes[task.type].count++;
+      index.dataTypes[task.type].totalQuality += dataQuality;
+      index.dataTypes[task.type].averageQuality = Math.round(
+        index.dataTypes[task.type].totalQuality / index.dataTypes[task.type].count
+      );
+
+      // Update course tracking
+      if (task.courseId) {
+        if (!index.courses[task.courseId]) {
+          index.courses[task.courseId] = {
+            name: task.courseName,
+            dataTypes: {},
+            totalQuality: 0,
+            dataCount: 0
+          };
+        }
+        const courseData = index.courses[task.courseId];
+        courseData.dataTypes[task.type] = dataQuality;
+        courseData.dataCount++;
+        courseData.totalQuality = Math.round(
+          Object.values(courseData.dataTypes).reduce((sum, q) => sum + q, 0) / courseData.dataCount
+        );
+      }
+
+      // Update overall average quality
+      const allQualities = Object.values(index.dataTypes).map(dt => dt.averageQuality);
+      index.averageQuality = Math.round(
+        allQualities.reduce((sum, q) => sum + q, 0) / allQualities.length
+      );
+
+      // Update summary
+      index.summary = {
+        coursesTracked: Object.keys(index.courses).length,
+        dataTypesCollected: Object.keys(index.dataTypes).length,
+        lastSyncQuality: dataQuality,
+        totalDataPoints: index.completedTasks
+      };
+
+      await chrome.storage.local.set({ [indexKey]: index });
+      console.log(`📈 Updated semester index: ${index.completedTasks} tasks, ${index.averageQuality}% avg quality`);
+
+    } catch (error) {
+      console.error('Failed to update semester data index:', error);
+    }
+  }
+
+  /**
+   * Clean up old data versions
+   */
+  async cleanupOldData(dataType) {
+    try {
+      console.log(`🧹 Cleaning up old ${dataType} data...`);
+      
+      // Get all storage keys
+      const allData = await chrome.storage.local.get();
+      const keysToClean = Object.keys(allData).filter(key => 
+        key.startsWith(`autonomous_data_${dataType}`) && 
+        allData[key].version && 
+        allData[key].version > 20 // Keep last 20 versions
+      );
+
+      // Remove old versions (keep only most recent)
+      for (const key of keysToClean) {
+        const data = allData[key];
+        if (data.version < Math.max(...keysToClean.map(k => allData[k].version)) - 10) {
+          await chrome.storage.local.remove(key);
+          console.log(`Cleaned up old version of ${key}`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to cleanup old data:', error);
     }
   }
 
@@ -757,6 +1154,428 @@ class TabManager {
       activeTabs: this.activeTabs.size,
       config: AUTONOMOUS_CONFIG
     };
+  }
+
+  // ============ SPECIALIZED DATA EXTRACTION METHODS (Phase 4.2) ============
+
+  /**
+   * Extract calendar data
+   */
+  extractCalendarData() {
+    try {
+      const events = [];
+      const calendarItems = document.querySelectorAll('.fc-event, .calendar-event, .planner-item');
+      
+      calendarItems.forEach(item => {
+        const title = item.querySelector('.fc-title, .event-title, .planner-item-title')?.textContent?.trim();
+        const date = item.querySelector('.fc-time, .event-date, .planner-item-date')?.textContent?.trim();
+        const course = item.querySelector('.course-name, .context-name')?.textContent?.trim();
+        
+        if (title) {
+          events.push({
+            title,
+            date,
+            course,
+            type: item.classList.contains('assignment') ? 'assignment' : 'event'
+          });
+        }
+      });
+
+      return {
+        type: 'calendar',
+        events,
+        extractedAt: new Date().toISOString(),
+        count: events.length
+      };
+    } catch (error) {
+      return {
+        type: 'calendar',
+        error: error.message,
+        events: []
+      };
+    }
+  }
+
+  /**
+   * Extract grades summary
+   */
+  extractGradesSummary() {
+    try {
+      const grades = [];
+      const gradeItems = document.querySelectorAll('.grades tr, .grade-summary-item, .course-grade');
+      
+      gradeItems.forEach(item => {
+        const course = item.querySelector('.course-name, .course-title, td:first-child')?.textContent?.trim();
+        const grade = item.querySelector('.grade, .current-grade, .final-grade')?.textContent?.trim();
+        const score = item.querySelector('.score, .points')?.textContent?.trim();
+        
+        if (course && grade) {
+          grades.push({
+            course,
+            grade,
+            score,
+            status: item.classList.contains('passing') ? 'passing' : 'unknown'
+          });
+        }
+      });
+
+      return {
+        type: 'grades-summary',
+        grades,
+        extractedAt: new Date().toISOString(),
+        count: grades.length
+      };
+    } catch (error) {
+      return {
+        type: 'grades-summary',
+        error: error.message,
+        grades: []
+      };
+    }
+  }
+
+  /**
+   * Extract todo list
+   */
+  extractTodoList() {
+    try {
+      const todos = [];
+      const todoItems = document.querySelectorAll('.todo-item, .to-do-item, .planner-item, .todo-list li');
+      
+      todoItems.forEach(item => {
+        const title = item.querySelector('.todo-title, .item-title, .assignment-name')?.textContent?.trim();
+        const dueDate = item.querySelector('.due-date, .todo-date, .due-at')?.textContent?.trim();
+        const course = item.querySelector('.course-name, .context-name')?.textContent?.trim();
+        const points = item.querySelector('.points, .todo-points')?.textContent?.trim();
+        
+        if (title) {
+          todos.push({
+            title,
+            dueDate,
+            course,
+            points,
+            priority: item.classList.contains('high-priority') ? 'high' : 'normal'
+          });
+        }
+      });
+
+      return {
+        type: 'todo',
+        todos,
+        extractedAt: new Date().toISOString(),
+        count: todos.length
+      };
+    } catch (error) {
+      return {
+        type: 'todo',
+        error: error.message,
+        todos: []
+      };
+    }
+  }
+
+  /**
+   * Extract assignments data for a specific course
+   */
+  extractAssignmentsData(courseId) {
+    try {
+      const assignments = [];
+      const assignmentItems = document.querySelectorAll('.assignment, .assignment-list-item, .ig-row');
+      
+      assignmentItems.forEach(item => {
+        const name = item.querySelector('.ig-title, .assignment-title, .assignment-name a')?.textContent?.trim();
+        const dueDate = item.querySelector('.due-date, .assignment-due-date, .due')?.textContent?.trim();
+        const points = item.querySelector('.points, .assignment-points')?.textContent?.trim();
+        const status = item.querySelector('.submission-status, .status')?.textContent?.trim();
+        const submitted = item.classList.contains('submitted') || status?.includes('Submitted');
+        
+        if (name) {
+          assignments.push({
+            name,
+            dueDate,
+            points,
+            status,
+            submitted,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-assignments',
+        courseId,
+        assignments,
+        extractedAt: new Date().toISOString(),
+        count: assignments.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-assignments',
+        courseId,
+        error: error.message,
+        assignments: []
+      };
+    }
+  }
+
+  /**
+   * Extract course grades
+   */
+  extractCourseGrades(courseId) {
+    try {
+      const grades = [];
+      const gradeItems = document.querySelectorAll('.grades tr, .assignment-grade-cell, .gradebook-row');
+      
+      gradeItems.forEach(item => {
+        const assignment = item.querySelector('.assignment-name, .gradebook-cell-title, td:first-child')?.textContent?.trim();
+        const score = item.querySelector('.grade, .score, .points-earned')?.textContent?.trim();
+        const outOf = item.querySelector('.points-possible, .out-of')?.textContent?.trim();
+        const percentage = item.querySelector('.percentage, .grade-percentage')?.textContent?.trim();
+        
+        if (assignment && score) {
+          grades.push({
+            assignment,
+            score,
+            outOf,
+            percentage,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-grades',
+        courseId,
+        grades,
+        extractedAt: new Date().toISOString(),
+        count: grades.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-grades',
+        courseId,
+        error: error.message,
+        grades: []
+      };
+    }
+  }
+
+  /**
+   * Extract announcements data
+   */
+  extractAnnouncementsData(courseId) {
+    try {
+      const announcements = [];
+      const announcementItems = document.querySelectorAll('.announcement, .discussion-topic, .ic-announcement-row');
+      
+      announcementItems.forEach(item => {
+        const title = item.querySelector('.discussion-title, .announcement-title, .ig-title')?.textContent?.trim();
+        const author = item.querySelector('.author, .discussion-author')?.textContent?.trim();
+        const date = item.querySelector('.discussion-date, .announcement-date, .created-at')?.textContent?.trim();
+        const content = item.querySelector('.discussion-summary, .announcement-content, .message')?.textContent?.trim();
+        
+        if (title) {
+          announcements.push({
+            title,
+            author,
+            date,
+            content: content?.substring(0, 500), // Limit content length
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-announcements',
+        courseId,
+        announcements,
+        extractedAt: new Date().toISOString(),
+        count: announcements.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-announcements',
+        courseId,
+        error: error.message,
+        announcements: []
+      };
+    }
+  }
+
+  /**
+   * Extract discussions data
+   */
+  extractDiscussionsData(courseId) {
+    try {
+      const discussions = [];
+      const discussionItems = document.querySelectorAll('.discussion-topic, .discussion, .ic-discussion-row');
+      
+      discussionItems.forEach(item => {
+        const title = item.querySelector('.discussion-title, .ig-title')?.textContent?.trim();
+        const author = item.querySelector('.author, .discussion-author')?.textContent?.trim();
+        const replies = item.querySelector('.reply-count, .discussion-reply-count')?.textContent?.trim();
+        const lastPost = item.querySelector('.last-post, .discussion-last-reply')?.textContent?.trim();
+        
+        if (title) {
+          discussions.push({
+            title,
+            author,
+            replies,
+            lastPost,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-discussions',
+        courseId,
+        discussions,
+        extractedAt: new Date().toISOString(),
+        count: discussions.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-discussions',
+        courseId,
+        error: error.message,
+        discussions: []
+      };
+    }
+  }
+
+  /**
+   * Extract modules data
+   */
+  extractModulesData(courseId) {
+    try {
+      const modules = [];
+      const moduleItems = document.querySelectorAll('.context-module, .module, .ig-row');
+      
+      moduleItems.forEach(item => {
+        const name = item.querySelector('.module-name, .ig-title, .context_module .name')?.textContent?.trim();
+        const items = [];
+        
+        // Get module items
+        const moduleItemElements = item.querySelectorAll('.context-module-item, .module-item');
+        moduleItemElements.forEach(moduleItem => {
+          const itemTitle = moduleItem.querySelector('.ig-title, .item-title')?.textContent?.trim();
+          const itemType = moduleItem.querySelector('.type, .item-type')?.textContent?.trim();
+          
+          if (itemTitle) {
+            items.push({
+              title: itemTitle,
+              type: itemType
+            });
+          }
+        });
+        
+        if (name) {
+          modules.push({
+            name,
+            items,
+            courseId,
+            itemCount: items.length
+          });
+        }
+      });
+
+      return {
+        type: 'course-modules',
+        courseId,
+        modules,
+        extractedAt: new Date().toISOString(),
+        count: modules.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-modules',
+        courseId,
+        error: error.message,
+        modules: []
+      };
+    }
+  }
+
+  /**
+   * Extract syllabus data
+   */
+  extractSyllabusData(courseId) {
+    try {
+      const syllabusContent = document.querySelector('.syllabus, .course-syllabus, .user_content')?.textContent?.trim();
+      const syllabusEvents = [];
+      
+      // Extract syllabus events if present
+      const eventItems = document.querySelectorAll('.syllabus-event, .event');
+      eventItems.forEach(item => {
+        const date = item.querySelector('.event-date, .date')?.textContent?.trim();
+        const title = item.querySelector('.event-title, .title')?.textContent?.trim();
+        
+        if (date && title) {
+          syllabusEvents.push({ date, title });
+        }
+      });
+
+      return {
+        type: 'course-syllabus',
+        courseId,
+        content: syllabusContent?.substring(0, 2000), // Limit content length
+        events: syllabusEvents,
+        extractedAt: new Date().toISOString(),
+        hasContent: !!syllabusContent,
+        eventCount: syllabusEvents.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-syllabus',
+        courseId,
+        error: error.message,
+        content: null,
+        events: []
+      };
+    }
+  }
+
+  /**
+   * Extract files data
+   */
+  extractFilesData(courseId) {
+    try {
+      const files = [];
+      const fileItems = document.querySelectorAll('.file, .ef-item-row, .files-list li');
+      
+      fileItems.forEach(item => {
+        const name = item.querySelector('.file-name, .ef-name-col, .filename')?.textContent?.trim();
+        const size = item.querySelector('.file-size, .ef-size-col, .size')?.textContent?.trim();
+        const modified = item.querySelector('.date-modified, .ef-date-created-col, .modified')?.textContent?.trim();
+        const type = item.querySelector('.file-type, .ef-kind-col')?.textContent?.trim();
+        
+        if (name) {
+          files.push({
+            name,
+            size,
+            modified,
+            type,
+            courseId
+          });
+        }
+      });
+
+      return {
+        type: 'course-files',
+        courseId,
+        files,
+        extractedAt: new Date().toISOString(),
+        count: files.length
+      };
+    } catch (error) {
+      return {
+        type: 'course-files',
+        courseId,
+        error: error.message,
+        files: []
+      };
+    }
   }
 }
 
@@ -919,6 +1738,115 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const taskId = tabManager.queueDataCollectionTask(request.data.task);
       sendResponse({ success: true, taskId });
       break;
+
+    // ============ PHASE 4.2: COMPREHENSIVE DATA ACCESS ============
+
+    case 'GET_SEMESTER_DATA_INDEX':
+      chrome.storage.local.get('autonomous_semester_index').then(result => {
+        sendResponse({ 
+          success: true, 
+          index: result.autonomous_semester_index || null 
+        });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'GET_COURSE_DATA':
+      const courseId = request.data?.courseId;
+      if (!courseId) {
+        sendResponse({ success: false, error: 'Course ID required' });
+        break;
+      }
+      
+      chrome.storage.local.get().then(allData => {
+        const courseData = {};
+        
+        // Collect all data for this course
+        for (const [key, value] of Object.entries(allData)) {
+          if (key.includes(`_${courseId}`) && key.startsWith('autonomous_data_')) {
+            const dataType = key.replace('autonomous_data_', '').replace(`_${courseId}`, '');
+            courseData[dataType] = value;
+          }
+        }
+        
+        sendResponse({ success: true, courseData });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'GET_ALL_AUTONOMOUS_DATA':
+      chrome.storage.local.get().then(allData => {
+        const autonomousData = {};
+        
+        // Filter and organize autonomous data
+        for (const [key, value] of Object.entries(allData)) {
+          if (key.startsWith('autonomous_data_') || key === 'autonomous_semester_index') {
+            autonomousData[key] = value;
+          }
+        }
+        
+        sendResponse({ success: true, data: autonomousData });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'GET_DATA_BY_TYPE':
+      const dataType = request.data?.dataType;
+      if (!dataType) {
+        sendResponse({ success: false, error: 'Data type required' });
+        break;
+      }
+      
+      chrome.storage.local.get().then(allData => {
+        const typeData = {};
+        
+        // Collect all data of this type
+        for (const [key, value] of Object.entries(allData)) {
+          if (key.startsWith(`autonomous_data_${dataType}`)) {
+            typeData[key] = value;
+          }
+        }
+        
+        sendResponse({ success: true, data: typeData });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'CLEAR_AUTONOMOUS_DATA':
+      const clearType = request.data?.type || 'all';
+      
+      chrome.storage.local.get().then(allData => {
+        const keysToRemove = [];
+        
+        if (clearType === 'all') {
+          // Clear all autonomous data
+          for (const key of Object.keys(allData)) {
+            if (key.startsWith('autonomous_data_') || key === 'autonomous_semester_index') {
+              keysToRemove.push(key);
+            }
+          }
+        } else {
+          // Clear specific data type
+          for (const key of Object.keys(allData)) {
+            if (key.startsWith(`autonomous_data_${clearType}`)) {
+              keysToRemove.push(key);
+            }
+          }
+        }
+        
+        if (keysToRemove.length > 0) {
+          return chrome.storage.local.remove(keysToRemove);
+        }
+      }).then(() => {
+        sendResponse({ success: true, cleared: clearType });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
 
     default:
       sendResponse({ error: 'Unknown action' });
@@ -1149,3 +2077,5 @@ function getLastExtractedData() {
 }
 
 console.log('Canvas Assistant background service worker fully initialized');
+console.log('🎯 All message handlers registered and ready');
+console.log('🤖 Autonomous system:', tabManager.autonomousEnabled ? 'ENABLED' : 'DISABLED');
