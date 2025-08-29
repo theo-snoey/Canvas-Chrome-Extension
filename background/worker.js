@@ -1,7 +1,17 @@
 // Canvas LMS Assistant - Background Service Worker
-// Handles extension lifecycle, tab management, and background tasks
+// Handles extension lifecycle, tab management, and autonomous background tasks
 
 console.log('Canvas Assistant background service worker loaded');
+
+// Autonomous Background System Configuration
+const AUTONOMOUS_CONFIG = {
+  syncInterval: 5 * 60 * 1000, // 5 minutes in milliseconds
+  maxRetries: 3,
+  retryDelay: 30000, // 30 seconds base delay
+  sessionCheckInterval: 60 * 1000, // Check session every minute
+  dataCollectionTimeout: 120000, // 2 minutes per collection task
+  queueMaxSize: 50 // Maximum queued tasks
+};
 
 // Tab Manager Class (inline to avoid import issues)
 class TabManager {
@@ -12,8 +22,22 @@ class TabManager {
     this.tabTimeout = 30000; // 30 second timeout for tab operations
     this.cleanupInterval = 60000; // Clean up old tabs every minute
 
+    // Autonomous features for Phase 4.1
+    this.dataCollectionQueue = []; // Queue for autonomous data collection tasks
+    this.retryQueue = new Map(); // taskId -> { task, retries, nextRetryTime, lastError }
+    this.sessionState = {
+      isAuthenticated: false,
+      lastCheck: null,
+      canvasDomain: null,
+      sessionId: null
+    };
+    this.autonomousEnabled = false;
+
     // Start cleanup process
     this.startCleanupProcess();
+
+    // Start autonomous processes
+    this.initializeAutonomousSystem();
   }
 
   /**
@@ -231,6 +255,13 @@ class TabManager {
     setInterval(() => {
       this.cleanupOldTabs();
     }, this.cleanupInterval);
+
+    // Start retry queue processor for autonomous system
+    setInterval(() => {
+      if (this.autonomousEnabled) {
+        this.processRetryQueue();
+      }
+    }, 10000); // Check retry queue every 10 seconds
   }
 
   /**
@@ -293,6 +324,440 @@ class TabManager {
     this.tabQueue = [];
     console.log('Force cleanup complete');
   }
+
+  // ============ AUTONOMOUS SYSTEM METHODS (Phase 4.1) ============
+
+  /**
+   * Initialize the autonomous background system
+   */
+  initializeAutonomousSystem() {
+    console.log('Initializing autonomous background system...');
+
+    // Start session monitoring
+    this.startSessionMonitoring();
+
+    // Set up autonomous sync alarms
+    this.setupAutonomousAlarms();
+
+    // Enable autonomous mode
+    this.autonomousEnabled = true;
+
+    console.log('Autonomous background system initialized');
+  }
+
+  /**
+   * Set up Chrome alarms for autonomous sync
+   */
+  setupAutonomousAlarms() {
+    // Clear any existing alarms
+    chrome.alarms.clearAll();
+
+    // Create main sync alarm (5-minute intervals)
+    chrome.alarms.create('canvas-autonomous-sync', {
+      delayInMinutes: 1, // Start after 1 minute
+      periodInMinutes: 5 // Repeat every 5 minutes
+    });
+
+    // Create session check alarm (every minute)
+    chrome.alarms.create('canvas-session-check', {
+      delayInMinutes: 0.5, // Start after 30 seconds
+      periodInMinutes: 1 // Repeat every minute
+    });
+
+    console.log('Autonomous alarms set up: sync (5min) and session check (1min)');
+  }
+
+  /**
+   * Start session monitoring system
+   */
+  startSessionMonitoring() {
+    // Check session immediately
+    this.checkCanvasSession();
+
+    // Set up periodic session checks
+    setInterval(() => {
+      this.checkCanvasSession();
+    }, AUTONOMOUS_CONFIG.sessionCheckInterval);
+  }
+
+  /**
+   * Check Canvas authentication status
+   */
+  async checkCanvasSession() {
+    try {
+      // Try to access a Canvas page to check authentication
+      const canvasUrls = [
+        'https://canvas.instructure.com/',
+        'https://*.canvas.com/',
+        'https://*.instructure.com/'
+      ];
+
+      // Create a temporary tab to check session
+      const sessionCheckTab = await this.createGhostTab(canvasUrls[0], 'session-check');
+
+      // Execute session check script
+      const sessionResult = await this.executeInTab(sessionCheckTab, () => {
+        // Check for authentication indicators
+        const loginForm = document.querySelector('form[action*="login"]');
+        const logoutLink = document.querySelector('a[href*="logout"], a[href*="sign_out"]');
+        const userMenu = document.querySelector('[data-user-id], .user-info, .ic-user-info');
+
+        return {
+          isAuthenticated: !loginForm && (logoutLink || userMenu),
+          hasLoginForm: !!loginForm,
+          hasUserMenu: !!userMenu,
+          currentUrl: window.location.href
+        };
+      });
+
+      // Update session state
+      const wasAuthenticated = this.sessionState.isAuthenticated;
+      this.sessionState.isAuthenticated = sessionResult.isAuthenticated;
+      this.sessionState.lastCheck = new Date().toISOString();
+
+      if (!sessionResult.isAuthenticated) {
+        this.sessionState.canvasDomain = null;
+        this.sessionState.sessionId = null;
+      } else {
+        // Extract domain from URL
+        const url = new URL(sessionResult.currentUrl);
+        this.sessionState.canvasDomain = url.hostname;
+      }
+
+      // Notify if authentication status changed
+      if (wasAuthenticated !== sessionResult.isAuthenticated) {
+        this.handleAuthenticationChange(sessionResult.isAuthenticated);
+      }
+
+      // Clean up session check tab
+      await this.closeGhostTab(sessionCheckTab);
+
+      console.log('Session check completed:', {
+        isAuthenticated: sessionResult.isAuthenticated,
+        domain: this.sessionState.canvasDomain
+      });
+
+    } catch (error) {
+      console.error('Session check failed:', error);
+      this.sessionState.isAuthenticated = false;
+      this.sessionState.lastCheck = new Date().toISOString();
+    }
+  }
+
+  /**
+   * Handle authentication status changes
+   */
+  handleAuthenticationChange(isAuthenticated) {
+    if (isAuthenticated) {
+      console.log('User authenticated to Canvas - enabling autonomous sync');
+
+      // Clear retry queue on successful authentication
+      this.retryQueue.clear();
+
+      // Trigger immediate data collection
+      this.triggerAutonomousSync();
+
+      // Notify user
+      this.notifyUser('Canvas session detected - autonomous sync enabled');
+
+    } else {
+      console.log('Canvas authentication lost - pausing autonomous sync');
+
+      // Pause autonomous operations
+      this.pauseAutonomousOperations();
+
+      // Notify user to re-authenticate
+      this.notifyUser('Canvas session expired - please log in to continue autonomous sync', 'warning');
+    }
+  }
+
+  /**
+   * Add task to data collection queue
+   */
+  queueDataCollectionTask(task) {
+    if (this.dataCollectionQueue.length >= AUTONOMOUS_CONFIG.queueMaxSize) {
+      console.warn('Data collection queue full, dropping task');
+      return false;
+    }
+
+    const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const queuedTask = {
+      id: taskId,
+      ...task,
+      queuedAt: new Date().toISOString(),
+      status: 'queued',
+      retries: 0
+    };
+
+    this.dataCollectionQueue.push(queuedTask);
+    console.log(`Queued data collection task: ${taskId} (${task.type})`);
+
+    // Process queue
+    this.processDataCollectionQueue();
+
+    return taskId;
+  }
+
+  /**
+   * Process data collection queue
+   */
+  async processDataCollectionQueue() {
+    if (!this.sessionState.isAuthenticated || this.activeTabs.size >= this.maxConcurrentTabs) {
+      return; // Wait for authentication or available tabs
+    }
+
+    const pendingTasks = this.dataCollectionQueue.filter(task => task.status === 'queued');
+
+    for (const task of pendingTasks) {
+      if (this.activeTabs.size >= this.maxConcurrentTabs) {
+        break; // Wait for available tabs
+      }
+
+      try {
+        await this.executeDataCollectionTask(task);
+      } catch (error) {
+        console.error(`Failed to execute task ${task.id}:`, error);
+        this.handleTaskFailure(task, error);
+      }
+    }
+  }
+
+  /**
+   * Execute a data collection task
+   */
+  async executeDataCollectionTask(task) {
+    console.log(`Executing data collection task: ${task.id} (${task.type})`);
+
+    // Update task status
+    task.status = 'running';
+    task.startedAt = new Date().toISOString();
+
+    // Create ghost tab for the task
+    const tabId = await this.createGhostTab(task.url, `autonomous-${task.type}`);
+
+    try {
+      // Execute the data extraction
+      const result = await this.executeInTab(tabId, task.extractorFunction);
+
+      // Process successful result
+      await this.handleTaskSuccess(task, result);
+
+    } finally {
+      // Always clean up the tab
+      await this.closeGhostTab(tabId);
+    }
+  }
+
+  /**
+   * Handle successful task execution
+   */
+  async handleTaskSuccess(task, result) {
+    console.log(`Task ${task.id} completed successfully`);
+
+    // Update task status
+    task.status = 'completed';
+    task.completedAt = new Date().toISOString();
+    task.result = result;
+
+    // Store result in chrome storage
+    await this.storeTaskResult(task, result);
+
+    // Remove from queue
+    this.removeFromQueue(task.id);
+
+    // Trigger next task processing
+    this.processDataCollectionQueue();
+  }
+
+  /**
+   * Handle task execution failure
+   */
+  handleTaskFailure(task, error) {
+    console.error(`Task ${task.id} failed:`, error);
+
+    task.lastError = error.message;
+    task.retries = (task.retries || 0) + 1;
+
+    if (task.retries < AUTONOMOUS_CONFIG.maxRetries) {
+      // Schedule retry with exponential backoff
+      const retryDelay = AUTONOMOUS_CONFIG.retryDelay * Math.pow(2, task.retries - 1);
+      task.nextRetryTime = Date.now() + retryDelay;
+      task.status = 'retry-scheduled';
+
+      console.log(`Scheduling retry for task ${task.id} in ${retryDelay}ms (attempt ${task.retries}/${AUTONOMOUS_CONFIG.maxRetries})`);
+
+      // Add to retry queue
+      this.retryQueue.set(task.id, task);
+
+    } else {
+      // Max retries exceeded
+      task.status = 'failed';
+      console.error(`Task ${task.id} failed permanently after ${AUTONOMOUS_CONFIG.maxRetries} retries`);
+
+      // Remove from queue
+      this.removeFromQueue(task.id);
+    }
+  }
+
+  /**
+   * Remove task from queue
+   */
+  removeFromQueue(taskId) {
+    this.dataCollectionQueue = this.dataCollectionQueue.filter(task => task.id !== taskId);
+    this.retryQueue.delete(taskId);
+  }
+
+  /**
+   * Process retry queue
+   */
+  processRetryQueue() {
+    const now = Date.now();
+
+    for (const [taskId, task] of this.retryQueue) {
+      if (task.nextRetryTime && now >= task.nextRetryTime) {
+        // Move task back to main queue for retry
+        task.status = 'queued';
+        task.nextRetryTime = null;
+
+        this.dataCollectionQueue.push(task);
+        this.retryQueue.delete(taskId);
+
+        console.log(`Moving task ${taskId} back to queue for retry`);
+      }
+    }
+  }
+
+  /**
+   * Trigger autonomous sync cycle
+   */
+  triggerAutonomousSync() {
+    if (!this.sessionState.isAuthenticated) {
+      console.log('Skipping autonomous sync - not authenticated');
+      return;
+    }
+
+    console.log('Triggering autonomous data collection sync...');
+
+    // Generate sync tasks for current semester data
+    const syncTasks = this.generateSyncTasks();
+
+    // Queue the tasks
+    for (const task of syncTasks) {
+      this.queueDataCollectionTask(task);
+    }
+
+    console.log(`Queued ${syncTasks.length} autonomous sync tasks`);
+  }
+
+  /**
+   * Generate autonomous sync tasks
+   */
+  generateSyncTasks() {
+    const tasks = [];
+
+    // Only generate tasks if we have a canvas domain
+    if (!this.sessionState.canvasDomain) {
+      return tasks;
+    }
+
+    const baseUrl = `https://${this.sessionState.canvasDomain}`;
+
+    // Dashboard data task
+    tasks.push({
+      type: 'dashboard',
+      url: `${baseUrl}/`,
+      extractorFunction: () => {
+        // This would call the existing data extractor
+        if (window.CanvasDataExtractor) {
+          return window.CanvasDataExtractor.extractCurrentPage();
+        }
+        return { type: 'dashboard', error: 'DataExtractor not available' };
+      }
+    });
+
+    // Courses data task
+    tasks.push({
+      type: 'courses-list',
+      url: `${baseUrl}/courses`,
+      extractorFunction: () => {
+        if (window.CanvasDataExtractor) {
+          return window.CanvasDataExtractor.extractCurrentPage();
+        }
+        return { type: 'courses', error: 'DataExtractor not available' };
+      }
+    });
+
+    return tasks;
+  }
+
+  /**
+   * Store task result in chrome storage
+   */
+  async storeTaskResult(task, result) {
+    try {
+      const storageKey = `autonomous_data_${task.type}`;
+      const storageData = {
+        [storageKey]: {
+          result,
+          taskId: task.id,
+          timestamp: new Date().toISOString(),
+          dataType: task.type
+        }
+      };
+
+      await chrome.storage.local.set(storageData);
+      console.log(`Stored autonomous data for ${task.type}`);
+    } catch (error) {
+      console.error('Failed to store task result:', error);
+    }
+  }
+
+  /**
+   * Pause autonomous operations
+   */
+  pauseAutonomousOperations() {
+    console.log('Pausing autonomous operations...');
+    this.autonomousEnabled = false;
+
+    // Clear any pending tasks
+    this.dataCollectionQueue = [];
+    this.retryQueue.clear();
+  }
+
+  /**
+   * Resume autonomous operations
+   */
+  resumeAutonomousOperations() {
+    console.log('Resuming autonomous operations...');
+    this.autonomousEnabled = true;
+
+    // Trigger immediate sync
+    this.triggerAutonomousSync();
+  }
+
+  /**
+   * Notify user (could be extended to show notifications)
+   */
+  notifyUser(message, type = 'info') {
+    console.log(`User notification (${type}): ${message}`);
+
+    // For now, just log. Could be extended to show browser notifications
+    // or update popup state to show messages
+  }
+
+  /**
+   * Get autonomous system statistics
+   */
+  getAutonomousStats() {
+    return {
+      autonomousEnabled: this.autonomousEnabled,
+      sessionState: { ...this.sessionState },
+      dataCollectionQueueLength: this.dataCollectionQueue.length,
+      retryQueueLength: this.retryQueue.size,
+      activeTabs: this.activeTabs.size,
+      config: AUTONOMOUS_CONFIG
+    };
+  }
 }
 
 // Create tab manager instance
@@ -304,16 +769,7 @@ console.log('Tab Manager initialized:', tabManager.getStats());
 let currentPageInfo = null;
 let activeCanvasTabs = new Set();
 
-// Initialize extension
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Canvas Assistant extension installed');
-  initializeStorage();
-});
-
-// Handle extension startup
-chrome.runtime.onStartup.addListener(() => {
-  console.log('Canvas Assistant extension started');
-});
+// Handle extension startup (moved to bottom with autonomous system)
 
 // Initialize storage
 function initializeStorage() {
@@ -425,6 +881,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     case 'GET_EXTRACTED_DATA':
       sendResponse({ success: true, data: getLastExtractedData() });
+      break;
+
+    // ============ AUTONOMOUS SYSTEM MESSAGE HANDLERS ============
+
+    case 'GET_AUTONOMOUS_STATS':
+      sendResponse({
+        success: true,
+        stats: tabManager.getAutonomousStats()
+      });
+      break;
+
+    case 'TRIGGER_AUTONOMOUS_SYNC':
+      tabManager.triggerAutonomousSync();
+      sendResponse({ success: true });
+      break;
+
+    case 'PAUSE_AUTONOMOUS':
+      tabManager.pauseAutonomousOperations();
+      sendResponse({ success: true });
+      break;
+
+    case 'RESUME_AUTONOMOUS':
+      tabManager.resumeAutonomousOperations();
+      sendResponse({ success: true });
+      break;
+
+    case 'CHECK_CANVAS_SESSION':
+      tabManager.checkCanvasSession().then(result => {
+        sendResponse({ success: true, sessionState: tabManager.sessionState });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'QUEUE_DATA_COLLECTION_TASK':
+      const taskId = tabManager.queueDataCollectionTask(request.data.task);
+      sendResponse({ success: true, taskId });
       break;
 
     default:
@@ -540,6 +1033,69 @@ chrome.action.onClicked.addListener((tab) => {
     setTimeout(() => {
       chrome.action.setBadgeText({ text: '' });
     }, 3000);
+  }
+});
+
+// ============ AUTONOMOUS SYSTEM ALARM HANDLERS ============
+
+/**
+ * Handle Chrome alarms for autonomous operations
+ */
+chrome.alarms.onAlarm.addListener((alarm) => {
+  console.log('Alarm triggered:', alarm.name);
+
+  switch (alarm.name) {
+    case 'canvas-autonomous-sync':
+      console.log('5-minute autonomous sync alarm triggered');
+      if (tabManager.autonomousEnabled) {
+        tabManager.triggerAutonomousSync();
+      }
+      break;
+
+    case 'canvas-session-check':
+      console.log('Session check alarm triggered');
+      if (tabManager.autonomousEnabled) {
+        tabManager.checkCanvasSession();
+      }
+      break;
+
+    default:
+      console.log('Unknown alarm:', alarm.name);
+  }
+});
+
+/**
+ * Handle autonomous system initialization on extension startup
+ */
+chrome.runtime.onStartup.addListener(() => {
+  console.log('Canvas Assistant extension started - initializing autonomous system');
+
+  // Re-initialize autonomous system on startup
+  if (tabManager && typeof tabManager.initializeAutonomousSystem === 'function') {
+    tabManager.initializeAutonomousSystem();
+  }
+});
+
+/**
+ * Handle extension installation
+ */
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('Canvas Assistant extension installed:', details.reason);
+
+  // Initialize storage
+  initializeStorage();
+
+  // Initialize autonomous system
+  if (tabManager && typeof tabManager.initializeAutonomousSystem === 'function') {
+    tabManager.initializeAutonomousSystem();
+  }
+
+  // Set up initial alarms if this is a fresh install
+  if (details.reason === 'install') {
+    console.log('Fresh install - setting up autonomous alarms');
+    if (tabManager && typeof tabManager.setupAutonomousAlarms === 'function') {
+      tabManager.setupAutonomousAlarms();
+    }
   }
 });
 
