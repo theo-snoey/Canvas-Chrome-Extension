@@ -32,7 +32,19 @@ class TabManager {
       isAuthenticated: false,
       lastCheck: null,
       canvasDomain: null,
-      sessionId: null
+      sessionId: null,
+      authenticationHistory: [],
+      lastAuthenticationLoss: null,
+      consecutiveFailures: 0,
+      supportedDomains: [
+        'canvas.instructure.com',
+        '*.instructure.com',
+        '*.canvas.com',
+        '*.canvas.edu',
+        '*.canvas.net',
+        '*.canvas.org'
+      ],
+      userDomains: [] // User-configured domains
     };
     this.autonomousEnabled = false;
 
@@ -41,6 +53,9 @@ class TabManager {
 
     // Start autonomous processes
     this.initializeAutonomousSystem();
+
+    // Load user domain configuration
+    this.loadUserDomainConfiguration();
   }
 
   /**
@@ -384,93 +399,505 @@ class TabManager {
   }
 
   /**
-   * Check Canvas authentication status
+   * Enhanced Canvas authentication status check (Phase 4.3)
    */
   async checkCanvasSession() {
+    const checkStartTime = Date.now();
+    console.log('🔍 Starting enhanced session check...');
+
     try {
-      // Try to access a Canvas page to check authentication
-      const canvasUrls = [
-        'https://canvas.instructure.com/',
-        'https://*.canvas.com/',
-        'https://*.instructure.com/'
-      ];
+      // Get potential Canvas domains to check
+      const domainsToCheck = await this.getCanvasDomainsToCheck();
+      let authenticationFound = false;
+      let authenticatedDomain = null;
+      let sessionDetails = null;
 
-      // Create a temporary tab to check session
-      const sessionCheckTab = await this.createGhostTab(canvasUrls[0], 'session-check');
+      // Check each potential Canvas domain
+      for (const domain of domainsToCheck) {
+        try {
+          console.log(`🔐 Checking authentication on: ${domain}`);
+          
+          const sessionCheckTab = await this.createGhostTab(`https://${domain}/`, 'session-check');
+          
+          // Enhanced session check with more authentication indicators
+          const sessionResult = await this.executeInTab(sessionCheckTab, () => {
+            // Multiple authentication indicators
+            const loginForm = document.querySelector('form[action*="login"], #login_form, .login-form');
+            const logoutLink = document.querySelector('a[href*="logout"], a[href*="sign_out"], .logout');
+            const userMenu = document.querySelector('[data-user-id], .user-info, .ic-user-info, .ic-avatar, .user_name');
+            const dashboardElements = document.querySelector('.ic-Dashboard, .dashboard, .course-list');
+            const canvasHeader = document.querySelector('.ic-app-header, .canvas-header, #header');
+            
+            // Check for Canvas-specific elements
+            const isCanvasPage = document.querySelector('[data-brand-config], .ic-app, .canvas') || 
+                                document.title.toLowerCase().includes('canvas') ||
+                                window.location.href.includes('canvas') ||
+                                window.location.href.includes('instructure');
 
-      // Execute session check script
-      const sessionResult = await this.executeInTab(sessionCheckTab, () => {
-        // Check for authentication indicators
-        const loginForm = document.querySelector('form[action*="login"]');
-        const logoutLink = document.querySelector('a[href*="logout"], a[href*="sign_out"]');
-        const userMenu = document.querySelector('[data-user-id], .user-info, .ic-user-info');
+            // Determine authentication status
+            const isAuthenticated = isCanvasPage && !loginForm && 
+                                  (logoutLink || userMenu || dashboardElements);
 
-        return {
-          isAuthenticated: !loginForm && (logoutLink || userMenu),
-          hasLoginForm: !!loginForm,
-          hasUserMenu: !!userMenu,
-          currentUrl: window.location.href
-        };
-      });
+            return {
+              isAuthenticated,
+              isCanvasPage,
+              hasLoginForm: !!loginForm,
+              hasLogoutLink: !!logoutLink,
+              hasUserMenu: !!userMenu,
+              hasDashboard: !!dashboardElements,
+              hasCanvasHeader: !!canvasHeader,
+              currentUrl: window.location.href,
+              pageTitle: document.title,
+              domain: window.location.hostname
+            };
+          });
 
-      // Update session state
+          await this.closeGhostTab(sessionCheckTab);
+
+          if (sessionResult.isAuthenticated) {
+            authenticationFound = true;
+            authenticatedDomain = sessionResult.domain;
+            sessionDetails = sessionResult;
+            console.log(`✅ Authentication found on: ${authenticatedDomain}`);
+            break; // Found authentication, stop checking other domains
+          }
+
+        } catch (error) {
+          console.error(`❌ Failed to check ${domain}:`, error.message);
+          continue; // Try next domain
+        }
+      }
+
+      // Update session state with enhanced tracking
       const wasAuthenticated = this.sessionState.isAuthenticated;
-      this.sessionState.isAuthenticated = sessionResult.isAuthenticated;
+      const previousDomain = this.sessionState.canvasDomain;
+      
+      this.sessionState.isAuthenticated = authenticationFound;
       this.sessionState.lastCheck = new Date().toISOString();
+      this.sessionState.canvasDomain = authenticatedDomain;
 
-      if (!sessionResult.isAuthenticated) {
-        this.sessionState.canvasDomain = null;
-        this.sessionState.sessionId = null;
+      // Track authentication history
+      this.updateAuthenticationHistory(authenticationFound, authenticatedDomain, sessionDetails);
+
+      // Handle authentication status changes
+      if (wasAuthenticated !== authenticationFound) {
+        await this.handleAuthenticationChange(authenticationFound, authenticatedDomain, previousDomain);
+      }
+
+      // Handle domain changes (user switched Canvas instances)
+      if (authenticationFound && previousDomain && previousDomain !== authenticatedDomain) {
+        console.log(`🔄 Canvas domain changed: ${previousDomain} → ${authenticatedDomain}`);
+        await this.handleDomainChange(previousDomain, authenticatedDomain);
+      }
+
+      // Update failure tracking
+      if (authenticationFound) {
+        this.sessionState.consecutiveFailures = 0;
       } else {
-        // Extract domain from URL
-        const url = new URL(sessionResult.currentUrl);
-        this.sessionState.canvasDomain = url.hostname;
+        this.sessionState.consecutiveFailures++;
       }
 
-      // Notify if authentication status changed
-      if (wasAuthenticated !== sessionResult.isAuthenticated) {
-        this.handleAuthenticationChange(sessionResult.isAuthenticated);
-      }
-
-      // Clean up session check tab
-      await this.closeGhostTab(sessionCheckTab);
-
-      console.log('Session check completed:', {
-        isAuthenticated: sessionResult.isAuthenticated,
-        domain: this.sessionState.canvasDomain
+      const checkDuration = Date.now() - checkStartTime;
+      console.log(`🔍 Session check completed in ${checkDuration}ms:`, {
+        isAuthenticated: authenticationFound,
+        domain: authenticatedDomain,
+        consecutiveFailures: this.sessionState.consecutiveFailures
       });
 
     } catch (error) {
-      console.error('Session check failed:', error);
+      console.error('❌ Session check failed:', error);
       this.sessionState.isAuthenticated = false;
       this.sessionState.lastCheck = new Date().toISOString();
+      this.sessionState.consecutiveFailures++;
+      
+      // If too many consecutive failures, suggest user action
+      if (this.sessionState.consecutiveFailures >= 5) {
+        this.notifyUser('Multiple session check failures - please check your Canvas access', 'error');
+      }
     }
   }
 
   /**
-   * Handle authentication status changes
+   * Get list of Canvas domains to check for authentication
    */
-  handleAuthenticationChange(isAuthenticated) {
+  async getCanvasDomainsToCheck() {
+    const domains = [];
+    
+    // Add user-configured domains first (highest priority)
+    domains.push(...this.sessionState.userDomains);
+    
+    // Add last known domain if available
+    if (this.sessionState.canvasDomain && !domains.includes(this.sessionState.canvasDomain)) {
+      domains.push(this.sessionState.canvasDomain);
+    }
+    
+    // Add domains from browser history/tabs
+    const historyDomains = await this.getCanvasDomainsFromHistory();
+    for (const domain of historyDomains) {
+      if (!domains.includes(domain)) {
+        domains.push(domain);
+      }
+    }
+    
+    // Add default domains as fallback
+    const defaultDomains = [
+      'canvas.instructure.com',
+      'canvas.com'
+    ];
+    
+    for (const domain of defaultDomains) {
+      if (!domains.includes(domain)) {
+        domains.push(domain);
+      }
+    }
+    
+    return domains.slice(0, 5); // Limit to 5 domains to avoid overwhelming
+  }
+
+  /**
+   * Get Canvas domains from browser history and open tabs
+   */
+  async getCanvasDomainsFromHistory() {
+    const domains = [];
+    
+    try {
+      // Get domains from open tabs
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (tab.url && this.isCanvasUrl(tab.url)) {
+          const domain = new URL(tab.url).hostname;
+          if (!domains.includes(domain)) {
+            domains.push(domain);
+          }
+        }
+      }
+      
+      // Could extend to check browser history if needed
+      // const history = await chrome.history.search({text: 'canvas', maxResults: 10});
+      
+    } catch (error) {
+      console.error('Failed to get Canvas domains from history:', error);
+    }
+    
+    return domains;
+  }
+
+  /**
+   * Check if URL is a Canvas URL
+   */
+  isCanvasUrl(url) {
+    if (!url) return false;
+    
+    const lowerUrl = url.toLowerCase();
+    return lowerUrl.includes('canvas') || 
+           lowerUrl.includes('instructure') ||
+           this.sessionState.supportedDomains.some(domain => {
+             const pattern = domain.replace('*', '.*');
+             return new RegExp(pattern).test(lowerUrl);
+           });
+  }
+
+  /**
+   * Update authentication history tracking
+   */
+  updateAuthenticationHistory(isAuthenticated, domain, sessionDetails) {
+    const historyEntry = {
+      timestamp: new Date().toISOString(),
+      isAuthenticated,
+      domain,
+      sessionDetails,
+      checkDuration: Date.now() - this.lastCheckStartTime
+    };
+    
+    this.sessionState.authenticationHistory.push(historyEntry);
+    
+    // Keep only last 50 entries
+    if (this.sessionState.authenticationHistory.length > 50) {
+      this.sessionState.authenticationHistory = this.sessionState.authenticationHistory.slice(-50);
+    }
+    
+    // Update last authentication loss time
+    if (!isAuthenticated && this.sessionState.isAuthenticated) {
+      this.sessionState.lastAuthenticationLoss = new Date().toISOString();
+    }
+  }
+
+  /**
+   * Enhanced authentication status change handler (Phase 4.3)
+   */
+  async handleAuthenticationChange(isAuthenticated, authenticatedDomain, previousDomain) {
+    const timestamp = new Date().toISOString();
+    
     if (isAuthenticated) {
-      console.log('User authenticated to Canvas - enabling autonomous sync');
+      console.log(`✅ User authenticated to Canvas on ${authenticatedDomain} - enabling autonomous sync`);
 
-      // Clear retry queue on successful authentication
+      // Clear retry queue and reset failure count on successful authentication
       this.retryQueue.clear();
+      this.sessionState.consecutiveFailures = 0;
 
-      // Trigger immediate data collection
+      // Store authentication success
+      await this.storeAuthenticationEvent('authenticated', authenticatedDomain);
+
+      // Trigger immediate comprehensive data collection
       this.triggerAutonomousSync();
 
-      // Notify user
-      this.notifyUser('Canvas session detected - autonomous sync enabled');
+      // Show success notification with domain info
+      this.showAuthenticationNotification('success', authenticatedDomain);
+
+      // Resume autonomous operations if they were paused
+      this.resumeAutonomousOperations();
 
     } else {
-      console.log('Canvas authentication lost - pausing autonomous sync');
+      console.log('❌ Canvas authentication lost - pausing autonomous sync');
+
+      // Store authentication loss
+      await this.storeAuthenticationEvent('authentication_lost', previousDomain);
 
       // Pause autonomous operations
       this.pauseAutonomousOperations();
 
-      // Notify user to re-authenticate
-      this.notifyUser('Canvas session expired - please log in to continue autonomous sync', 'warning');
+      // Show re-authentication prompt based on failure count
+      await this.showReAuthenticationPrompt();
+    }
+  }
+
+  /**
+   * Handle Canvas domain changes (user switched Canvas instances)
+   */
+  async handleDomainChange(previousDomain, newDomain) {
+    console.log(`🔄 Canvas domain changed: ${previousDomain} → ${newDomain}`);
+    
+    // Store domain change event
+    await this.storeAuthenticationEvent('domain_changed', newDomain, { previousDomain });
+    
+    // Clear data from previous domain if user wants
+    const shouldClearData = await this.shouldClearPreviousDomainData(previousDomain, newDomain);
+    if (shouldClearData) {
+      await this.clearDomainSpecificData(previousDomain);
+    }
+    
+    // Add new domain to user domains if not already present
+    if (!this.sessionState.userDomains.includes(newDomain)) {
+      this.sessionState.userDomains.push(newDomain);
+      await this.saveUserDomainConfiguration();
+    }
+    
+    // Trigger immediate sync for new domain
+    this.triggerAutonomousSync();
+    
+    this.notifyUser(`Switched to Canvas instance: ${newDomain}`, 'info');
+  }
+
+  /**
+   * Show user-friendly re-authentication prompts
+   */
+  async showReAuthenticationPrompt() {
+    const failureCount = this.sessionState.consecutiveFailures;
+    const lastAuthLoss = this.sessionState.lastAuthenticationLoss;
+    const timeSinceLastAuth = lastAuthLoss ? Date.now() - new Date(lastAuthLoss).getTime() : 0;
+    
+    let message = 'Canvas session expired - please log in to continue autonomous sync';
+    let urgency = 'warning';
+    
+    // Escalate message based on failure count and time
+    if (failureCount >= 3) {
+      message = 'Multiple authentication failures detected - please check your Canvas login';
+      urgency = 'error';
+    } else if (timeSinceLastAuth > 3600000) { // 1 hour
+      message = 'Canvas session has been expired for over an hour - please log in';
+      urgency = 'error';
+    }
+    
+    // Show notification
+    this.showAuthenticationNotification('re_auth_needed', null, message);
+    
+    // Create re-authentication helper if failures persist
+    if (failureCount >= 5) {
+      await this.createReAuthenticationHelper();
+    }
+  }
+
+  /**
+   * Show authentication notifications with different types
+   */
+  showAuthenticationNotification(type, domain, customMessage) {
+    let title = 'Canvas Assistant';
+    let message = customMessage;
+    let icon = 'info';
+    
+    switch (type) {
+      case 'success':
+        title = '✅ Canvas Connected';
+        message = message || `Successfully connected to ${domain}`;
+        icon = 'success';
+        break;
+        
+      case 're_auth_needed':
+        title = '🔐 Authentication Required';
+        message = message || 'Please log in to Canvas to continue autonomous sync';
+        icon = 'warning';
+        break;
+        
+      case 'domain_changed':
+        title = '🔄 Canvas Instance Changed';
+        message = message || `Now using ${domain}`;
+        icon = 'info';
+        break;
+        
+      case 'multiple_failures':
+        title = '❌ Authentication Issues';
+        message = message || 'Multiple Canvas authentication failures detected';
+        icon = 'error';
+        break;
+    }
+    
+    // Log notification (could be extended to show browser notifications)
+    console.log(`🔔 ${title}: ${message}`);
+    this.notifyUser(message, icon);
+    
+    // Store notification for history
+    this.storeNotificationHistory(type, title, message, domain);
+  }
+
+  /**
+   * Create re-authentication helper for persistent failures
+   */
+  async createReAuthenticationHelper() {
+    console.log('🆘 Creating re-authentication helper due to persistent failures');
+    
+    // Could create a special popup or notification to guide user
+    // For now, just provide detailed logging
+    const knownDomains = this.sessionState.userDomains.length > 0 
+      ? this.sessionState.userDomains 
+      : ['canvas.instructure.com'];
+    
+    console.log('🔧 Re-authentication help:');
+    console.log('   1. Try logging into one of these Canvas domains:');
+    knownDomains.forEach(domain => {
+      console.log(`      - https://${domain}/`);
+    });
+    console.log('   2. Make sure cookies are enabled');
+    console.log('   3. Try refreshing your Canvas page');
+    console.log('   4. Check if your school uses a different Canvas domain');
+    
+    this.notifyUser('Authentication helper created - check console for guidance', 'info');
+  }
+
+  /**
+   * Store authentication events for tracking
+   */
+  async storeAuthenticationEvent(eventType, domain, metadata = {}) {
+    try {
+      const event = {
+        type: eventType,
+        domain,
+        timestamp: new Date().toISOString(),
+        metadata
+      };
+      
+      const storageKey = 'canvas_auth_events';
+      const existing = await chrome.storage.local.get(storageKey);
+      const events = existing[storageKey] || [];
+      
+      events.push(event);
+      
+      // Keep only last 100 events
+      if (events.length > 100) {
+        events.splice(0, events.length - 100);
+      }
+      
+      await chrome.storage.local.set({ [storageKey]: events });
+      console.log(`📝 Stored authentication event: ${eventType} on ${domain}`);
+      
+    } catch (error) {
+      console.error('Failed to store authentication event:', error);
+    }
+  }
+
+  /**
+   * Store notification history
+   */
+  storeNotificationHistory(type, title, message, domain) {
+    // Add to a simple in-memory history (could be persisted if needed)
+    if (!this.notificationHistory) {
+      this.notificationHistory = [];
+    }
+    
+    this.notificationHistory.push({
+      type,
+      title,
+      message,
+      domain,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Keep only last 50 notifications
+    if (this.notificationHistory.length > 50) {
+      this.notificationHistory = this.notificationHistory.slice(-50);
+    }
+  }
+
+  /**
+   * Check if should clear data from previous domain
+   */
+  async shouldClearPreviousDomainData(previousDomain, newDomain) {
+    // For now, don't automatically clear data
+    // Could be extended to ask user or have configurable behavior
+    return false;
+  }
+
+  /**
+   * Clear domain-specific data
+   */
+  async clearDomainSpecificData(domain) {
+    try {
+      const allData = await chrome.storage.local.get();
+      const keysToRemove = [];
+      
+      for (const key of Object.keys(allData)) {
+        if (key.includes(domain) || 
+            (allData[key] && allData[key].domain === domain)) {
+          keysToRemove.push(key);
+        }
+      }
+      
+      if (keysToRemove.length > 0) {
+        await chrome.storage.local.remove(keysToRemove);
+        console.log(`🧹 Cleared ${keysToRemove.length} data entries for domain: ${domain}`);
+      }
+      
+    } catch (error) {
+      console.error('Failed to clear domain-specific data:', error);
+    }
+  }
+
+  /**
+   * Save user domain configuration
+   */
+  async saveUserDomainConfiguration() {
+    try {
+      await chrome.storage.local.set({
+        canvas_user_domains: this.sessionState.userDomains,
+        canvas_domain_config_updated: new Date().toISOString()
+      });
+      console.log('💾 Saved user domain configuration:', this.sessionState.userDomains);
+    } catch (error) {
+      console.error('Failed to save user domain configuration:', error);
+    }
+  }
+
+  /**
+   * Load user domain configuration
+   */
+  async loadUserDomainConfiguration() {
+    try {
+      const result = await chrome.storage.local.get(['canvas_user_domains', 'canvas_domain_config_updated']);
+      if (result.canvas_user_domains) {
+        this.sessionState.userDomains = result.canvas_user_domains;
+        console.log('📂 Loaded user domain configuration:', this.sessionState.userDomains);
+      }
+    } catch (error) {
+      console.error('Failed to load user domain configuration:', error);
     }
   }
 
@@ -1847,6 +2274,109 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
       });
       return true;
+
+    // ============ PHASE 4.3: AUTHENTICATION MANAGEMENT ============
+
+    case 'GET_AUTH_STATUS':
+      sendResponse({
+        success: true,
+        authStatus: {
+          isAuthenticated: tabManager.sessionState.isAuthenticated,
+          domain: tabManager.sessionState.canvasDomain,
+          lastCheck: tabManager.sessionState.lastCheck,
+          consecutiveFailures: tabManager.sessionState.consecutiveFailures,
+          authenticationHistory: tabManager.sessionState.authenticationHistory.slice(-10), // Last 10 entries
+          supportedDomains: tabManager.sessionState.supportedDomains,
+          userDomains: tabManager.sessionState.userDomains
+        }
+      });
+      break;
+
+    case 'ADD_CANVAS_DOMAIN':
+      const domainToAdd = request.data?.domain;
+      if (!domainToAdd) {
+        sendResponse({ success: false, error: 'Domain required' });
+        break;
+      }
+      
+      if (!tabManager.sessionState.userDomains.includes(domainToAdd)) {
+        tabManager.sessionState.userDomains.push(domainToAdd);
+        tabManager.saveUserDomainConfiguration().then(() => {
+          sendResponse({ success: true, userDomains: tabManager.sessionState.userDomains });
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Domain already configured' });
+      }
+      return true;
+
+    case 'REMOVE_CANVAS_DOMAIN':
+      const domainToRemove = request.data?.domain;
+      if (!domainToRemove) {
+        sendResponse({ success: false, error: 'Domain required' });
+        break;
+      }
+      
+      const domainIndex = tabManager.sessionState.userDomains.indexOf(domainToRemove);
+      if (domainIndex > -1) {
+        tabManager.sessionState.userDomains.splice(domainIndex, 1);
+        tabManager.saveUserDomainConfiguration().then(() => {
+          sendResponse({ success: true, userDomains: tabManager.sessionState.userDomains });
+        }).catch(error => {
+          sendResponse({ success: false, error: error.message });
+        });
+      } else {
+        sendResponse({ success: false, error: 'Domain not found in configuration' });
+      }
+      return true;
+
+    case 'GET_AUTH_EVENTS':
+      chrome.storage.local.get('canvas_auth_events').then(result => {
+        sendResponse({
+          success: true,
+          events: result.canvas_auth_events || []
+        });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'CLEAR_AUTH_EVENTS':
+      chrome.storage.local.remove('canvas_auth_events').then(() => {
+        sendResponse({ success: true });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'FORCE_AUTH_CHECK':
+      tabManager.checkCanvasSession().then(() => {
+        sendResponse({
+          success: true,
+          authStatus: {
+            isAuthenticated: tabManager.sessionState.isAuthenticated,
+            domain: tabManager.sessionState.canvasDomain,
+            lastCheck: tabManager.sessionState.lastCheck
+          }
+        });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+
+    case 'GET_NOTIFICATION_HISTORY':
+      sendResponse({
+        success: true,
+        notifications: tabManager.notificationHistory || []
+      });
+      break;
+
+    case 'RESET_AUTH_FAILURES':
+      tabManager.sessionState.consecutiveFailures = 0;
+      tabManager.sessionState.lastAuthenticationLoss = null;
+      sendResponse({ success: true });
+      break;
 
     default:
       sendResponse({ error: 'Unknown action' });
