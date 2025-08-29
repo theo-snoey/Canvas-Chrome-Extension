@@ -39,6 +39,9 @@ function initializePopup() {
 
   // Check Canvas status on popup open
   checkCanvasStatus();
+
+  // PHASE 1.1: Initialize progress monitoring
+  initializeProgressMonitoring();
 }
 
 async function checkCanvasStatus() {
@@ -242,6 +245,88 @@ async function processMessage(message) {
 /**
  * Add development mode toggle button
  */
+// PHASE 1.1: Initialize progress monitoring
+function initializeProgressMonitoring() {
+  // Start monitoring startup progress immediately
+  monitorStartupProgress();
+  
+  // Set up periodic progress checks
+  setInterval(monitorStartupProgress, 1000); // Check every second
+}
+
+// PHASE 1.1: Monitor startup scraping progress
+async function monitorStartupProgress() {
+  try {
+    const progressData = await chrome.storage.local.get([
+      'startupScrapeScheduled',
+      'startupScrapeInProgress', 
+      'startupScrapeCompleted',
+      'startupScrapeFailed',
+      'scrapeProgress',
+      'startupScrapeStartTime',
+      'startupScrapeEndTime'
+    ]);
+
+    const progressSection = document.getElementById('progressSection');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const progressDetails = document.getElementById('progressDetails');
+
+    // Show progress section if scraping is active or recently completed
+    if (progressData.startupScrapeInProgress || 
+        (progressData.startupScrapeCompleted && Date.now() - progressData.startupScrapeEndTime < 10000)) {
+      
+      progressSection.style.display = 'block';
+
+      if (progressData.startupScrapeInProgress) {
+        // Active scraping
+        progressBar.style.width = '60%'; // Indeterminate progress
+        progressText.textContent = progressData.scrapeProgress || 'Scraping Canvas data...';
+        
+        const elapsed = progressData.startupScrapeStartTime ? 
+          Math.round((Date.now() - progressData.startupScrapeStartTime) / 1000) : 0;
+        progressDetails.textContent = `Elapsed: ${elapsed}s • Comprehensive data extraction in progress`;
+        
+      } else if (progressData.startupScrapeCompleted) {
+        // Completed scraping
+        progressBar.style.width = '100%';
+        progressText.textContent = 'Startup scraping completed successfully!';
+        
+        const duration = progressData.startupScrapeEndTime && progressData.startupScrapeStartTime ?
+          Math.round((progressData.startupScrapeEndTime - progressData.startupScrapeStartTime) / 1000) : 0;
+        progressDetails.textContent = `Completed in ${duration}s • Canvas data is ready for chat`;
+        
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+          progressSection.style.display = 'none';
+        }, 5000);
+      }
+      
+    } else if (progressData.startupScrapeFailed) {
+      // Failed scraping
+      progressSection.style.display = 'block';
+      progressBar.style.width = '100%';
+      progressBar.style.background = '#ef4444'; // Red for error
+      progressText.textContent = 'Startup scraping failed';
+      progressDetails.textContent = progressData.startupScrapeError || 'Unknown error occurred';
+      
+    } else if (progressData.startupScrapeScheduled && !progressData.startupScrapeInProgress) {
+      // Scheduled but not started yet
+      progressSection.style.display = 'block';
+      progressBar.style.width = '10%';
+      progressText.textContent = 'Preparing to scrape Canvas data...';
+      progressDetails.textContent = 'Startup scraping will begin shortly';
+      
+    } else {
+      // No active progress to show
+      progressSection.style.display = 'none';
+    }
+
+  } catch (error) {
+    console.error('Error monitoring startup progress:', error);
+  }
+}
+
 function addDevToggle() {
   // Only add in development (you can remove this check for production)
   const devToggle = document.createElement('button');

@@ -25,7 +25,7 @@ console.log('🚀 Background worker initialization starting...');
 
 // Autonomous Background System Configuration
 const AUTONOMOUS_CONFIG = {
-  syncInterval: 30 * 1000, // 30 seconds in milliseconds (was 5 minutes)
+  syncInterval: 10 * 60 * 1000, // 10 minutes in milliseconds (PHASE 1.1: Changed from 30s for background refresh)
   maxRetries: 3,
   retryDelay: 10000, // 10 seconds base delay (was 30 seconds)
   sessionCheckInterval: 15 * 1000, // Check session every 15 seconds (was 1 minute)
@@ -402,6 +402,9 @@ class TabManager {
     // Enable autonomous mode
     this.autonomousEnabled = true;
 
+    // PHASE 1.1: Trigger immediate startup scraping within 10 seconds
+    this.scheduleImmediateStartupScraping();
+
     console.log('Autonomous background system initialized');
   }
 
@@ -412,10 +415,15 @@ class TabManager {
     // Clear any existing alarms
     chrome.alarms.clearAll();
 
-    // Create main sync alarm (30-second intervals for fast testing)
+    // PHASE 1.1: Create immediate startup alarm (starts within 10 seconds)
+    chrome.alarms.create('canvas-startup-scrape', {
+      delayInMinutes: 0.15 // Start after 9 seconds (immediate startup)
+    });
+
+    // Create main sync alarm (10-minute intervals for background refresh)
     chrome.alarms.create('canvas-autonomous-sync', {
-      delayInMinutes: 0.1, // Start after 6 seconds
-      periodInMinutes: 0.5 // Repeat every 30 seconds
+      delayInMinutes: 10, // Start after 10 minutes (after initial scrape)
+      periodInMinutes: 10 // Repeat every 10 minutes
     });
 
     // Create session check alarm (every 15 seconds)
@@ -424,7 +432,75 @@ class TabManager {
       periodInMinutes: 0.25 // Repeat every 15 seconds
     });
 
-    console.log('⚡ Fast autonomous alarms set up: sync (30s) and session check (15s)');
+    console.log('⚡ Startup-optimized alarms set up: immediate startup (9s), sync (10min), session check (15s)');
+  }
+
+  /**
+   * PHASE 1.1: Schedule immediate startup scraping
+   */
+  scheduleImmediateStartupScraping() {
+    console.log('🚀 Scheduling immediate startup scraping...');
+    
+    // Set a timeout as backup in case alarm fails
+    setTimeout(() => {
+      console.log('⏰ Backup timeout triggered - starting immediate scrape');
+      this.triggerStartupScraping();
+    }, 8000); // 8 seconds as backup
+    
+    // Also store startup flag for progress tracking
+    chrome.storage.local.set({
+      startupScrapeScheduled: true,
+      startupScrapeTime: Date.now()
+    });
+  }
+
+  /**
+   * PHASE 1.1: Trigger comprehensive startup scraping
+   */
+  async triggerStartupScraping() {
+    try {
+      console.log('🎯 STARTUP SCRAPING INITIATED - Full Canvas data collection starting...');
+      
+      // Update progress indicator
+      await chrome.storage.local.set({
+        startupScrapeInProgress: true,
+        startupScrapeStartTime: Date.now(),
+        scrapeProgress: 'Initializing comprehensive Canvas scrape...'
+      });
+
+      // Check if we should pause (for testing)
+      const { autonomousPaused } = await chrome.storage.local.get('autonomousPaused');
+      if (autonomousPaused) {
+        console.log('⏸️ Startup scraping paused by autonomousPaused flag');
+        await chrome.storage.local.set({
+          startupScrapeInProgress: false,
+          scrapeProgress: 'Startup scraping paused'
+        });
+        return;
+      }
+
+      // Trigger comprehensive sync (same as regular sync but marked as startup)
+      await this.triggerAutonomousSync(true); // true = isStartupScrape
+
+      console.log('✅ STARTUP SCRAPING COMPLETED');
+      
+      // Update completion status
+      await chrome.storage.local.set({
+        startupScrapeInProgress: false,
+        startupScrapeCompleted: true,
+        startupScrapeEndTime: Date.now(),
+        scrapeProgress: 'Startup scraping completed successfully'
+      });
+
+    } catch (error) {
+      console.error('❌ Startup scraping failed:', error);
+      await chrome.storage.local.set({
+        startupScrapeInProgress: false,
+        startupScrapeFailed: true,
+        startupScrapeError: error.message,
+        scrapeProgress: `Startup scraping failed: ${error.message}`
+      });
+    }
   }
 
   /**
@@ -1340,24 +1416,40 @@ class TabManager {
 
   /**
    * Trigger autonomous sync cycle
+   * @param {boolean} isStartupScrape - Whether this is the initial startup scrape
    */
-  async triggerAutonomousSync() {
+  async triggerAutonomousSync(isStartupScrape = false) {
     if (!this.sessionState.isAuthenticated) {
       console.log('Skipping autonomous sync - not authenticated');
       return;
     }
 
-    console.log('Triggering autonomous data collection sync...');
+    const syncType = isStartupScrape ? 'STARTUP SCRAPE' : 'autonomous sync';
+    console.log(`Triggering ${syncType} - comprehensive data collection...`);
+
+    // PHASE 1.1: Update progress for startup scraping
+    if (isStartupScrape) {
+      await chrome.storage.local.set({
+        scrapeProgress: 'Generating comprehensive sync tasks...'
+      });
+    }
 
     // Generate sync tasks for current semester data
     const syncTasks = await this.generateSyncTasks();
+
+    // PHASE 1.1: Update progress
+    if (isStartupScrape) {
+      await chrome.storage.local.set({
+        scrapeProgress: `Queueing ${syncTasks.length} comprehensive data collection tasks...`
+      });
+    }
 
     // Queue the tasks
     for (const task of syncTasks) {
       this.queueDataCollectionTask(task);
     }
 
-    console.log(`Queued ${syncTasks.length} autonomous sync tasks`);
+    console.log(`✅ Queued ${syncTasks.length} ${syncType} tasks`);
   }
 
   /**
@@ -3226,8 +3318,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   console.log('Alarm triggered:', alarm.name);
 
   switch (alarm.name) {
+    case 'canvas-startup-scrape':
+      console.log('🚀 STARTUP SCRAPE alarm triggered - initiating immediate comprehensive scraping');
+      if (tabManager.autonomousEnabled) {
+        tabManager.triggerStartupScraping().catch(error => {
+          console.error('❌ Failed to trigger startup scraping:', error);
+        });
+      }
+      break;
+
     case 'canvas-autonomous-sync':
-      console.log('⚡ 30-second autonomous sync alarm triggered');
+      console.log('⚡ 10-minute autonomous sync alarm triggered');
       if (tabManager.autonomousEnabled) {
         tabManager.triggerAutonomousSync().catch(error => {
           console.error('❌ Failed to trigger autonomous sync:', error);
